@@ -1,0 +1,4 @@
+interface:
+  display_name: "TalkTrack-Master"
+  short_description: "Normal-node IVR system TTS setup and readback"
+  default_prompt: "Use $talktrack-master to configure a Shandian normal-node and jump-node IVR scene with system TTS and readback validation."
