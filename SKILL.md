@@ -1,7 +1,7 @@
 ---
 name: talktrack-master
 version: v0.4.0
-github_repo: Larry220/TalkTrack-Master
+github_repo: LIGHTNINGAI-CO-LIMITED/TalkTrack-Master
 github_path: "."
 github_branch: main
 description: Use when configuring, creating, updating, validating, or packaging Shandian Intelligent normal-node and jump-node IVR scenes in the admin backend, especially tasks involving 普通节点, 跳转节点, 结束节点, 系统 TTS, recordType=2, ttsPlaybackList, ttsPlaybackListJson, 知识库答案, NLP 匹配知识库, 大模型意图分析 2.0, /ivr/findSceneList/{ivrId}, readback reports, and Obsidian archival. Do not use for 智能Agent/智能节点 Prompt or llmNodeModelConfig work; use talktrack-agent for those.

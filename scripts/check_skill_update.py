@@ -17,7 +17,7 @@ from typing import Dict, Iterable, List, Tuple
 
 
 SKILL_NAME = "talktrack-master"
-REPO = "Larry220/TalkTrack-Master"
+REPO = "LIGHTNINGAI-CO-LIMITED/TalkTrack-Master"
 BRANCH = "main"
 REMOTE_PREFIX = ""
 ALLOWED_ROOTS = ("SKILL.md", "references/", "scripts/", "agents/")
