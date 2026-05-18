@@ -1,16 +1,36 @@
 ---
 name: talktrack-master
-description: Use when configuring, creating, updating, validating, or packaging Shandian Intelligent normal-node and jump-node IVR scenes in the admin backend, especially tasks involving 普通节点, 跳转节点, 结束节点, 系统 TTS, recordType=2, ttsPlaybackList, ttsPlaybackListJson, 知识库答案, NLP 匹配知识库, 大模型意图分析 2.0, /ivr/findSceneList/{ivrId}, readback reports, and Obsidian archival. Do not use for 智能Agent/智能节点 Prompt or llmNodeModelConfig work; use sd-admin-ivr-config for those.
+version: v0.4.0
+github_repo: Larry220/TalkTrack-Master
+github_path: "."
+github_branch: main
+description: Use when configuring, creating, updating, validating, or packaging Shandian Intelligent normal-node and jump-node IVR scenes in the admin backend, especially tasks involving 普通节点, 跳转节点, 结束节点, 系统 TTS, recordType=2, ttsPlaybackList, ttsPlaybackListJson, 知识库答案, NLP 匹配知识库, 大模型意图分析 2.0, /ivr/findSceneList/{ivrId}, readback reports, and Obsidian archival. Do not use for 智能Agent/智能节点 Prompt or llmNodeModelConfig work; use talktrack-agent for those.
 ---
 
 # TalkTrack-Master
 
 Use this skill for Shandian Intelligent normal-node and jump-node IVR configuration. The v0.2 path supports new-test-IVR creation, readback-only audits, system TTS checks, mandatory NLP knowledge-base matching, mandatory large model intent recognition 2.0, page text-debug layered-recognition regression, and strategy optimization plans, then proves the result through API readback, page spot checks, redacted reports, and Obsidian archival.
 
+## Skill Update Check
+
+At the start of any task using this skill, run the bundled update check:
+
+```powershell
+python "C:\Users\luona\.codex\skills\talktrack-master\scripts\check_skill_update.py" --check
+```
+
+If the result is `update_available`, tell the user the local version and GitHub version, then recommend updating before continuing. Do not update automatically. Only when the user confirms, run:
+
+```powershell
+python "C:\Users\luona\.codex\skills\talktrack-master\scripts\check_skill_update.py" --apply
+```
+
+If the check fails because GitHub or the network is unavailable, mention the failed check briefly and continue with the current local skill. The update check must not use, print, store, or request business API tokens; it only reads the public GitHub skill repository.
+
 ## Boundary
 
 - Use `talktrack-master` for normal nodes, jump nodes, end nodes, system TTS, knowledge-base answers, node-level NLP knowledge-base matching, IVR-level Advanced Settings large model intent recognition 2.0, routed-node model intent configuration, and readback validation.
-- Use `sd-admin-ivr-config` for smart Agent nodes, smart-node Prompt import, `llmNodeModelConfig`, terminal intent rules, and intent-label governance.
+- Use `talktrack-agent` for smart Agent nodes, smart-node Prompt import, `llmNodeModelConfig`, terminal intent rules, and intent-label governance.
 - Do not mix the two skills unless the user explicitly asks for a workflow crossing both surfaces.
 
 ## Non-Negotiables
@@ -30,22 +50,23 @@ Use this skill for Shandian Intelligent normal-node and jump-node IVR configurat
 
 ## v0.1 Workflow
 
-1. Read the current task and classify the target: normal node, jump node, end node, knowledge-base answer, or readback-only.
-2. If the task involves backend writes, validate token with `/account/findInfo`.
-3. Snapshot the target IVR with `/ivr/findSceneList/{ivrId}` before changing it.
-4. For system TTS, use `recordType=2`:
+1. Run the Skill Update Check. If a newer GitHub version exists, recommend updating and wait for the user's confirmation before applying it.
+2. Read the current task and classify the target: normal node, jump node, end node, knowledge-base answer, or readback-only.
+3. If the task involves backend writes, validate token with `/account/findInfo`.
+4. Snapshot the target IVR with `/ivr/findSceneList/{ivrId}` before changing it.
+5. For system TTS, use `recordType=2`:
    - normal nodes use non-empty `ttsPlaybackList`
    - knowledge-base answers use non-empty `ttsPlaybackListJson`
    - expected audio paths look like `tts/YYYY-MM-DD/*.wav`
-5. For jump nodes, keep target node IDs, ports, backend `sceneList`, frontend `sceneListFrontend`, and graph custom data consistent.
-6. Generate TTS with `/ivr/createNodeTextTtsRecord`, poll `/ivr/queryTtsRecord`, then write back returned `recordFilePath`.
-7. Enable NLP knowledge-base matching on every normal node that handles user replies. Bind all current IVR knowledge-base IDs explicitly with `knowledgeBaseMatchType=2`, and add the `-2` knowledge-base intent when missing.
-8. Review NLP trigger quality: prefer short, synonym-friendly keywords / regex phrases for knowledge-base matching and node intents. Long customer-style sentences belong in answers or the 2.0 prompt.
-9. Enable Advanced Settings large model intent recognition 2.0 with `POST <authenticated-api-base>/ivr/updateModelIntentRecognitionConfig`. Use the target IVR ID as `id`, set `modelIntentRecognitionEnabled=1`, use the approved scene-specific `modelPrompt` and `modelResultFormat`, keep `modelId=55`, timeout `2000`, `modelMaxTokens>=4096`, and `modelRecognitionRound=0`.
-10. Enable or preserve node-level large model intent recognition 2.0 on every normal node that handles user replies. Preserve existing valid node configs; create a node-level `modelIntentRecognitionConfig` from the approved template when it is missing.
-11. Read back with `/ivr/findSceneList/{ivrId}` plus knowledge-base list/detail endpoints when answers are touched. For knowledge-base matching and node-level 2.0, validate backend nodes, frontend node copies, and graph `customData`; for Advanced Settings 2.0, validate the IVR-level fields and page echo.
-12. When a page check is needed, inspect `/script-graph?ivrId=<ivrId>`. Current system TTS UI evidence is `试听` / `重新合成`; current NLP UI evidence is checked `匹配知识库` with explicit selected knowledge bases; current 2.0 UI evidence is checked `大模型意图分析2.0`.
-13. Write redacted reports and indexes to the Obsidian vault, then run `obsidian 'vault=闪电智能知识库' unresolved total`.
+6. For jump nodes, keep target node IDs, ports, backend `sceneList`, frontend `sceneListFrontend`, and graph custom data consistent.
+7. Generate TTS with `/ivr/createNodeTextTtsRecord`, poll `/ivr/queryTtsRecord`, then write back returned `recordFilePath`.
+8. Enable NLP knowledge-base matching on every normal node that handles user replies. Bind all current IVR knowledge-base IDs explicitly with `knowledgeBaseMatchType=2`, and add the `-2` knowledge-base intent when missing.
+9. Review NLP trigger quality: prefer short, synonym-friendly keywords / regex phrases for knowledge-base matching and node intents. Long customer-style sentences belong in answers or the 2.0 prompt.
+10. Enable Advanced Settings large model intent recognition 2.0 with `POST <authenticated-api-base>/ivr/updateModelIntentRecognitionConfig`. Use the target IVR ID as `id`, set `modelIntentRecognitionEnabled=1`, use the approved scene-specific `modelPrompt` and `modelResultFormat`, keep `modelId=55`, timeout `2000`, `modelMaxTokens>=4096`, and `modelRecognitionRound=0`.
+11. Enable or preserve node-level large model intent recognition 2.0 on every normal node that handles user replies. Preserve existing valid node configs; create a node-level `modelIntentRecognitionConfig` from the approved template when it is missing.
+12. Read back with `/ivr/findSceneList/{ivrId}` plus knowledge-base list/detail endpoints when answers are touched. For knowledge-base matching and node-level 2.0, validate backend nodes, frontend node copies, and graph `customData`; for Advanced Settings 2.0, validate the IVR-level fields and page echo.
+13. When a page check is needed, inspect `/script-graph?ivrId=<ivrId>`. Current system TTS UI evidence is `试听` / `重新合成`; current NLP UI evidence is checked `匹配知识库` with explicit selected knowledge bases; current 2.0 UI evidence is checked `大模型意图分析2.0`.
+14. Write redacted reports and indexes to the Obsidian vault, then run `obsidian 'vault=闪电智能知识库' unresolved total`.
 
 ## v0.2 Task Modes
 
@@ -78,6 +99,8 @@ Generate candidates but ask for confirmation before finalizing:
 - bulk model intent recognition 2.0 writes without readback evidence
 
 ## References
+
+Use `scripts/check_skill_update.py --check` before starting a task to compare the local skill version with GitHub. Use `--apply` only after the user confirms they want to update the local installed skill.
 
 Read `references/system-tts-normal-node-v0.1.md` before implementing or reviewing any backend write or readback involving normal nodes, jump nodes, system TTS, knowledge-base answers, NLP knowledge-base matching, or large model intent recognition 2.0.
 
