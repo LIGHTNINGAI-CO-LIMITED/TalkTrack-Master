@@ -1,6 +1,6 @@
 ---
 name: talktrack-master
-version: v0.4.0
+version: v0.4.1
 github_repo: LIGHTNINGAI-CO-LIMITED/TalkTrack-Master
 github_path: "."
 github_branch: main
@@ -25,7 +25,24 @@ If the result is `update_available`, tell the user the local version and GitHub 
 python "C:\Users\luona\.codex\skills\talktrack-master\scripts\check_skill_update.py" --apply
 ```
 
-If the check fails because GitHub or the network is unavailable, mention the failed check briefly and continue with the current local skill. The update check must not use, print, store, or request business API tokens; it only reads the public GitHub skill repository.
+If the check fails because GitHub, TLS, certificate chain, or the network is unavailable, do not treat the local skill as up to date. For backend write/import/configuration tasks, pause and ask the user to update or explicitly approve continuing with the current local version. For urgent read-only work, you may continue only after clearly stating that the update status is unknown. The update check must not use, print, store, or request business API tokens; it only reads the public GitHub skill repository.
+
+The bundled checker must try the GitHub Contents API before raw GitHub, and fall back across Python urllib, certifi, curl.exe, and PowerShell WebClient. A Python certificate-chain failure is a transport problem, not proof that the skill is current.
+
+### Old Local Version Bootstrap
+
+If a coworker is still on `v0.4.0` and the old update checker is blocked by Python certificate-chain or raw.githubusercontent.com access, the old checker may not be able to self-heal. For backend write/import/configuration work, do not continue on the stale local copy until one of these happens:
+
+1. The user explicitly accepts using the stale local skill for this one run.
+2. The coworker runs the one-time bootstrap script:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\skills\talktrack-master\scripts\bootstrap_update_talktrack_master.ps1"
+```
+
+If the bootstrap script is missing in their local skill folder, give them the copy-ready bootstrap prompt documented in:
+
+`D:\ObsidianVault\闪电智能知识库\20-Skills\talktrack-master\TalkTrack-Master_v0.4.1_更新检查与旧版自救升级_20260519.md`
 
 ## Boundary
 
@@ -100,7 +117,7 @@ Generate candidates but ask for confirmation before finalizing:
 
 ## References
 
-Use `scripts/check_skill_update.py --check` before starting a task to compare the local skill version with GitHub. Use `--apply` only after the user confirms they want to update the local installed skill.
+Use `scripts/check_skill_update.py --check` before starting a task to compare the local skill version with GitHub. Use `--apply` only after the user confirms they want to update the local installed skill. If the check reports `check_failed`, do not silently continue with backend writes; use the bootstrap path above or get explicit user confirmation.
 
 Read `references/system-tts-normal-node-v0.1.md` before implementing or reviewing any backend write or readback involving normal nodes, jump nodes, system TTS, knowledge-base answers, NLP knowledge-base matching, or large model intent recognition 2.0.
 

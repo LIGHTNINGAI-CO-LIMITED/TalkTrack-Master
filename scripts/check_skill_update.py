@@ -8,12 +8,15 @@ API tokens, Obsidian secrets, browser cookies, or Shandian backend credentials.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
+import ssl
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple
 
 
 SKILL_NAME = "talktrack-master"
@@ -29,13 +32,75 @@ class UpdateCheckError(RuntimeError):
     pass
 
 
-def request_bytes(url: str) -> bytes:
+def request_bytes_urllib(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return response.read()
+
+
+def request_bytes_urllib_certifi(url: str) -> bytes:
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return response.read()
-    except Exception as exc:  # pragma: no cover - surfaced as a concise CLI error
-        raise UpdateCheckError(f"request_failed url={url} error={exc}") from exc
+        import certifi  # type: ignore
+    except Exception as exc:  # pragma: no cover - optional fallback
+        raise RuntimeError(f"certifi_unavailable error={exc}") from exc
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=20, context=context) as response:
+        return response.read()
+
+
+def request_bytes_curl(url: str) -> bytes:
+    completed = subprocess.run(
+        ["curl.exe", "-L", "--fail", "--silent", "--show-error", url],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=40,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.decode("utf-8", errors="replace").strip())
+    return completed.stdout
+
+
+def request_bytes_powershell(url: str) -> bytes:
+    command = (
+        "$ProgressPreference='SilentlyContinue';"
+        "[Net.ServicePointManager]::SecurityProtocol="
+        "[Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;"
+        "$wc=New-Object System.Net.WebClient;"
+        "$wc.Headers.Add('User-Agent','TalkTrack-Skill-Update-Check/1.0');"
+        "$bytes=$wc.DownloadData($args[0]);"
+        "[Console]::Out.Write([Convert]::ToBase64String($bytes))"
+    )
+    completed = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command, url],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=40,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip())
+    return base64.b64decode(completed.stdout.strip())
+
+
+def request_bytes(url: str) -> bytes:
+    channels: List[Tuple[str, Callable[[str], bytes]]] = [
+        ("urllib", request_bytes_urllib),
+        ("urllib_certifi", request_bytes_urllib_certifi),
+        ("curl", request_bytes_curl),
+        ("powershell", request_bytes_powershell),
+    ]
+    errors: List[str] = []
+    for name, getter in channels:
+        try:
+            return getter(url)
+        except Exception as exc:  # pragma: no cover - surfaced as a concise CLI error
+            errors.append(f"{name}: {exc}")
+    raise UpdateCheckError(
+        f"all_fetch_channels_failed url={url} errors={' | '.join(errors)}"
+    )
 
 
 def request_text(url: str) -> str:
@@ -46,12 +111,39 @@ def raw_url(path: str) -> str:
     return f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{path}"
 
 
+def contents_url(path: str) -> str:
+    return f"https://api.github.com/repos/{REPO}/contents/{path}?ref={BRANCH}"
+
+
 def tree_url() -> str:
     return f"https://api.github.com/repos/{REPO}/git/trees/{BRANCH}?recursive=1"
 
 
 def remote_skill_path() -> str:
     return f"{REMOTE_PREFIX}/SKILL.md" if REMOTE_PREFIX else "SKILL.md"
+
+
+def decode_contents_payload(text: str, path: str) -> bytes:
+    payload = json.loads(text)
+    if payload.get("type") != "file":
+        raise UpdateCheckError(f"github_contents_not_file path={path}")
+    if payload.get("encoding") != "base64":
+        raise UpdateCheckError(
+            f"github_contents_unexpected_encoding path={path} "
+            f"encoding={payload.get('encoding')}"
+        )
+    return base64.b64decode((payload.get("content") or "").encode("ascii"))
+
+
+def request_contents_bytes(path: str) -> bytes:
+    return decode_contents_payload(request_text(contents_url(path)), path)
+
+
+def request_remote_file_bytes(path: str) -> bytes:
+    try:
+        return request_contents_bytes(path)
+    except Exception:
+        return request_bytes(raw_url(path))
 
 
 def parse_frontmatter(text: str) -> Dict[str, str]:
@@ -95,7 +187,7 @@ def local_metadata() -> Dict[str, str]:
 
 
 def remote_metadata() -> Dict[str, str]:
-    return parse_frontmatter(request_text(raw_url(remote_skill_path())))
+    return parse_frontmatter(request_remote_file_bytes(remote_skill_path()).decode("utf-8"))
 
 
 def get_status() -> Dict[str, str]:
@@ -153,7 +245,7 @@ def apply_update(force: bool = False) -> List[str]:
     for remote_path, relative_path in remote_files():
         target_path = LOCAL_ROOT / Path(relative_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(request_bytes(raw_url(remote_path)))
+        target_path.write_bytes(request_remote_file_bytes(remote_path))
         updated.append(relative_path)
     return sorted(updated)
 
@@ -190,7 +282,21 @@ def main(argv: List[str]) -> int:
         print_result(result, as_json=args.json)
         return 0
     except UpdateCheckError as exc:
-        error = {"skill": SKILL_NAME, "status": "check_failed", "error": str(exc)}
+        try:
+            local_version = local_metadata().get("version", "unknown")
+        except Exception:
+            local_version = "unknown"
+        error = {
+            "skill": SKILL_NAME,
+            "local_version": local_version,
+            "remote_version": "unknown",
+            "status": "check_failed",
+            "error": str(exc),
+            "manual_action": (
+                "Do not treat this as up-to-date. For backend write/import tasks, "
+                "pause and ask the user to update or explicitly accept using the local version."
+            ),
+        }
         print_result(error, as_json=args.json)
         return 2
 
