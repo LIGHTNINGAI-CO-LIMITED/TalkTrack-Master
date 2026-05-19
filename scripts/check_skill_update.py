@@ -16,7 +16,7 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 
 SKILL_NAME = "talktrack-master"
@@ -26,6 +26,7 @@ REMOTE_PREFIX = ""
 ALLOWED_ROOTS = ("SKILL.md", "references/", "scripts/", "agents/")
 LOCAL_ROOT = Path(__file__).resolve().parents[1]
 USER_AGENT = "TalkTrack-Skill-Update-Check/1.0"
+_REMOTE_TREE_CACHE: Optional[List[Dict[str, object]]] = None
 
 
 class UpdateCheckError(RuntimeError):
@@ -33,7 +34,15 @@ class UpdateCheckError(RuntimeError):
 
 
 def request_bytes_urllib(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github+json",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+    )
     with urllib.request.urlopen(request, timeout=20) as response:
         return response.read()
 
@@ -43,7 +52,15 @@ def request_bytes_urllib_certifi(url: str) -> bytes:
         import certifi  # type: ignore
     except Exception as exc:  # pragma: no cover - optional fallback
         raise RuntimeError(f"certifi_unavailable error={exc}") from exc
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github+json",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+    )
     context = ssl.create_default_context(cafile=certifi.where())
     with urllib.request.urlopen(request, timeout=20, context=context) as response:
         return response.read()
@@ -51,7 +68,20 @@ def request_bytes_urllib_certifi(url: str) -> bytes:
 
 def request_bytes_curl(url: str) -> bytes:
     completed = subprocess.run(
-        ["curl.exe", "-L", "--fail", "--silent", "--show-error", url],
+        [
+            "curl.exe",
+            "-L",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "Cache-Control: no-cache",
+            "-H",
+            "Pragma: no-cache",
+            url,
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=40,
@@ -69,6 +99,9 @@ def request_bytes_powershell(url: str) -> bytes:
         "[Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;"
         "$wc=New-Object System.Net.WebClient;"
         "$wc.Headers.Add('User-Agent','TalkTrack-Skill-Update-Check/1.0');"
+        "$wc.Headers.Add('Accept','application/vnd.github+json');"
+        "$wc.Headers.Add('Cache-Control','no-cache');"
+        "$wc.Headers.Add('Pragma','no-cache');"
         "$bytes=$wc.DownloadData($args[0]);"
         "[Console]::Out.Write([Convert]::ToBase64String($bytes))"
     )
@@ -107,8 +140,28 @@ def request_text(url: str) -> str:
     return request_bytes(url).decode("utf-8")
 
 
+def request_json(url: str) -> Dict[str, object]:
+    return json.loads(request_text(url))
+
+
 def raw_url(path: str) -> str:
     return f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{path}"
+
+
+def ref_url() -> str:
+    return f"https://api.github.com/repos/{REPO}/git/ref/heads/{BRANCH}"
+
+
+def commit_url(sha: str) -> str:
+    return f"https://api.github.com/repos/{REPO}/git/commits/{sha}"
+
+
+def tree_by_sha_url(sha: str) -> str:
+    return f"https://api.github.com/repos/{REPO}/git/trees/{sha}?recursive=1"
+
+
+def blob_url(sha: str) -> str:
+    return f"https://api.github.com/repos/{REPO}/git/blobs/{sha}"
 
 
 def contents_url(path: str) -> str:
@@ -121,6 +174,82 @@ def tree_url() -> str:
 
 def remote_skill_path() -> str:
     return f"{REMOTE_PREFIX}/SKILL.md" if REMOTE_PREFIX else "SKILL.md"
+
+
+def remote_head_sha() -> str:
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "ls-remote",
+                f"https://github.com/{REPO}.git",
+                f"refs/heads/{BRANCH}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=40,
+            check=False,
+        )
+        if completed.returncode == 0:
+            first = completed.stdout.strip().split()[0]
+            if re.fullmatch(r"[0-9a-fA-F]{40}", first):
+                return first
+    except Exception:
+        pass
+
+    payload = request_json(ref_url())
+    obj = payload.get("object")
+    if not isinstance(obj, dict):
+        raise UpdateCheckError(f"github_ref_missing_object branch={BRANCH}")
+    sha = obj.get("sha")
+    if not isinstance(sha, str) or not sha:
+        raise UpdateCheckError(f"github_ref_missing_sha branch={BRANCH}")
+    return sha
+
+
+def remote_tree_items() -> List[Dict[str, object]]:
+    global _REMOTE_TREE_CACHE
+    if _REMOTE_TREE_CACHE is not None:
+        return _REMOTE_TREE_CACHE
+
+    head_sha = remote_head_sha()
+    commit_payload = request_json(commit_url(head_sha))
+    tree = commit_payload.get("tree")
+    if not isinstance(tree, dict):
+        raise UpdateCheckError(f"github_commit_missing_tree sha={head_sha}")
+    tree_sha = tree.get("sha")
+    if not isinstance(tree_sha, str) or not tree_sha:
+        raise UpdateCheckError(f"github_commit_missing_tree_sha sha={head_sha}")
+
+    tree_payload = request_json(tree_by_sha_url(tree_sha))
+    items = tree_payload.get("tree")
+    if not isinstance(items, list):
+        raise UpdateCheckError(f"github_tree_missing_items sha={tree_sha}")
+    _REMOTE_TREE_CACHE = [
+        item for item in items if isinstance(item, dict)
+    ]
+    return _REMOTE_TREE_CACHE
+
+
+def request_blob_bytes(path: str) -> bytes:
+    normalized_path = path.replace("\\", "/")
+    for item in remote_tree_items():
+        if item.get("type") != "blob":
+            continue
+        if item.get("path") != normalized_path:
+            continue
+        sha = item.get("sha")
+        if not isinstance(sha, str) or not sha:
+            raise UpdateCheckError(f"github_blob_missing_sha path={path}")
+        payload = request_json(blob_url(sha))
+        if payload.get("encoding") != "base64":
+            raise UpdateCheckError(
+                f"github_blob_unexpected_encoding path={path} "
+                f"encoding={payload.get('encoding')}"
+            )
+        return base64.b64decode((payload.get("content") or "").encode("ascii"))
+    raise UpdateCheckError(f"github_blob_missing path={path}")
 
 
 def decode_contents_payload(text: str, path: str) -> bytes:
@@ -140,6 +269,10 @@ def request_contents_bytes(path: str) -> bytes:
 
 
 def request_remote_file_bytes(path: str) -> bytes:
+    try:
+        return request_blob_bytes(path)
+    except Exception:
+        pass
     try:
         return request_contents_bytes(path)
     except Exception:
@@ -217,8 +350,7 @@ def allowed_relative_path(relative_path: str) -> bool:
 
 
 def remote_files() -> Iterable[Tuple[str, str]]:
-    payload = json.loads(request_text(tree_url()))
-    for item in payload.get("tree", []):
+    for item in remote_tree_items():
         if item.get("type") != "blob":
             continue
         remote_path = item.get("path", "")

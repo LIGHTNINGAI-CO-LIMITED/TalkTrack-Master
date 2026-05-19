@@ -1,6 +1,6 @@
 ---
 name: talktrack-master
-version: v0.4.1
+version: v0.4.2
 github_repo: LIGHTNINGAI-CO-LIMITED/TalkTrack-Master
 github_path: "."
 github_branch: main
@@ -27,7 +27,7 @@ python "C:\Users\luona\.codex\skills\talktrack-master\scripts\check_skill_update
 
 If the check fails because GitHub, TLS, certificate chain, or the network is unavailable, do not treat the local skill as up to date. For backend write/import/configuration tasks, pause and ask the user to update or explicitly approve continuing with the current local version. For urgent read-only work, you may continue only after clearly stating that the update status is unknown. The update check must not use, print, store, or request business API tokens; it only reads the public GitHub skill repository.
 
-The bundled checker must try the GitHub Contents API before raw GitHub, and fall back across Python urllib, certifi, curl.exe, and PowerShell WebClient. A Python certificate-chain failure is a transport problem, not proof that the skill is current.
+The bundled checker must prefer `git ls-remote` to read the real GitHub remote HEAD SHA, fetch files by explicit GitHub tree/blob SHA, then fall back through GitHub Contents API and raw GitHub. It must also fall back across Python urllib, certifi, curl.exe, and PowerShell WebClient. A Python certificate-chain failure or branch-content cache is a transport problem, not proof that the skill is current.
 
 ### Old Local Version Bootstrap
 
