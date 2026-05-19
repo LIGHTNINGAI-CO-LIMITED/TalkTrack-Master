@@ -1,6 +1,6 @@
 ---
 name: talktrack-master
-version: v0.4.2
+version: v0.4.3
 github_repo: LIGHTNINGAI-CO-LIMITED/TalkTrack-Master
 github_path: "."
 github_branch: main
@@ -12,6 +12,14 @@ description: Use when configuring, creating, updating, validating, or packaging 
 Use this skill for Shandian Intelligent normal-node and jump-node IVR configuration. The v0.2 path supports new-test-IVR creation, readback-only audits, system TTS checks, mandatory NLP knowledge-base matching, mandatory large model intent recognition 2.0, page text-debug layered-recognition regression, and strategy optimization plans, then proves the result through API readback, page spot checks, redacted reports, and Obsidian archival.
 
 ## Skill Update Check
+
+For backend write/import/configuration tasks, first run the project-level preflight when the workspace is `D:\闪电智能`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "D:\闪电智能\tools\talktrack_skill_preflight.ps1" -Skill talktrack-master -Mode Write
+```
+
+If preflight fails because the local skill is stale and the local GitHub mirror under `D:\闪电智能\github\TalkTrack-Master` is trusted/current, run the same preflight with `-InstallFromLocalRepo` and re-check. Do not request backend write authorization until preflight prints `PREFLIGHT_PASS`.
 
 At the start of any task using this skill, run the bundled update check:
 
@@ -34,7 +42,11 @@ The bundled checker must prefer `git ls-remote` to read the real GitHub remote H
 If a coworker is still on `v0.4.0` and the old update checker is blocked by Python certificate-chain or raw.githubusercontent.com access, the old checker may not be able to self-heal. For backend write/import/configuration work, do not continue on the stale local copy until one of these happens:
 
 1. The user explicitly accepts using the stale local skill for this one run.
-2. The coworker runs the one-time bootstrap script:
+2. The coworker runs the project-level preflight with local-repo install or the one-time bootstrap script:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "D:\闪电智能\tools\talktrack_skill_preflight.ps1" -Skill talktrack-master -Mode Write -InstallFromLocalRepo
+```
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\skills\talktrack-master\scripts\bootstrap_update_talktrack_master.ps1"

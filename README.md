@@ -37,6 +37,22 @@ git clone https://github.com/Larry220/TalkTrack-Master.git "$env:USERPROFILE\.co
 
 If the target folder already exists, back it up or pull updates from inside that folder.
 
+## Required Write Preflight
+
+Before any backend write/import/configuration task in `D:\闪电智能`, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "D:\闪电智能\tools\talktrack_skill_preflight.ps1" -Skill talktrack-master -Mode Write
+```
+
+If the local skill is stale and the local repo mirror is trusted/current, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "D:\闪电智能\tools\talktrack_skill_preflight.ps1" -Skill talktrack-master -Mode Write -InstallFromLocalRepo
+```
+
+The preflight must print `PREFLIGHT_PASS` before backend writes.
+
 ## Safety Rules
 
 - Do not commit access tokens, API keys, passwords, cookies, browser state, raw customer exports, or large artifacts.
