@@ -118,6 +118,33 @@ Required readback fields:
 
 Do not treat "enabled with an empty list" as the default success state. The field may have ambiguous runtime/UI interpretation; for TalkTrack-Master, prefer explicit binding to all current IVR knowledge bases for page clarity and pressure-test stability. If new knowledge bases are added later, rerun matching so every routed normal node includes the new IDs.
 
+### Frontend Canvas Intent List Shape
+
+The backend and the canvas frontend use different `intentList` shapes.
+
+Backend route shape in `sceneList.nodeList[].intentList`:
+
+```json
+[{"27620":"node-xxx"},{"-2":""},{"-1":"node-yyy"}]
+```
+
+Frontend canvas option shape in `sceneListFrontend.nodeList[].intentList` and graph `data.customData.intentList`:
+
+```json
+[{"value":"27620","label":"客户肯定/默认","digitSequence":""},{"value":"-2","label":"知识库","digitSequence":""},{"value":"-1","label":"兜底","digitSequence":""}]
+```
+
+Do not deep-copy a backend node into `sceneListFrontend` or graph `customData` without converting `intentList`. The page save logic reads `value` from the frontend option rows and then rebuilds routes from canvas ports / edges. If the frontend list is accidentally replaced by backend route dictionaries, page save may generate abnormal routes and the backend can return a generic `system error`.
+
+Canvas-save acceptance:
+
+- backend `sceneList` keeps route dictionaries and preserves real target node IDs
+- frontend `sceneListFrontend.nodeList` uses option rows with `value`, `label`, and `digitSequence`
+- graph `data.customData.intentList` uses the same frontend option-row shape
+- graph `data.ports`, cell port items, and edge source ports use the same `value`
+- after writing, an unchanged backend save and a simulated page-save rebuild both return success when this check is available
+- if a user keeps an old `/script-graph` browser tab open, refresh before clicking page save because the old tab may still hold stale canvas data
+
 ### NLP Trigger Design
 
 NLP and knowledge-base matching run before large model intent recognition 2.0. Treat this layer as a regex / short-trigger layer:

@@ -422,9 +422,71 @@ def update_ivr_model_intent_recognition_config(client: Client, ivr_id: int) -> d
 
 def has_intent(node: dict[str, Any], intent_id: str) -> bool:
     for item in node.get("intentList") or []:
-        if isinstance(item, dict) and str(intent_id) in {str(key) for key in item.keys()}:
+        if not isinstance(item, dict):
+            continue
+        if str(intent_id) in {str(key) for key in item.keys()}:
+            return True
+        if str(item.get("value")) == str(intent_id):
             return True
     return False
+
+
+def intent_target_map_from_backend(node: dict[str, Any]) -> dict[str, str]:
+    target_map: dict[str, str] = {}
+    for item in node.get("intentList") or []:
+        if not isinstance(item, dict) or "value" in item:
+            continue
+        for intent_id, target_id in item.items():
+            if target_id:
+                target_map[str(intent_id)] = str(target_id)
+    return target_map
+
+
+def frontend_intent_rows_from_backend(
+    backend_node: dict[str, Any],
+    label_by_intent: dict[str, str] | None = None,
+    existing_sources: list[dict[str, Any] | None] | None = None,
+) -> list[dict[str, str]]:
+    labels: dict[str, str] = {"-2": "知识库", "-1": "兜底"}
+    labels.update(label_by_intent or {})
+    digit_sequences: dict[str, str] = {}
+
+    for source in existing_sources or []:
+        if not isinstance(source, dict):
+            continue
+        for row in source.get("intentList") or []:
+            if isinstance(row, dict) and row.get("value") is not None:
+                value = str(row.get("value"))
+                if row.get("label"):
+                    labels[value] = str(row.get("label"))
+                digit_sequences[value] = str(row.get("digitSequence") or "")
+        for row in source.get("ports") or []:
+            if isinstance(row, dict) and row.get("value") is not None:
+                value = str(row.get("value"))
+                if row.get("label"):
+                    labels[value] = str(row.get("label"))
+                digit_sequences[value] = str(row.get("digitSequence") or "")
+
+    rows: list[dict[str, str]] = []
+    for item in backend_node.get("intentList") or []:
+        if not isinstance(item, dict) or "value" in item:
+            continue
+        for intent_id in item.keys():
+            value = str(intent_id)
+            rows.append(
+                {
+                    "value": value,
+                    "label": labels.get(value, value),
+                    "digitSequence": digit_sequences.get(value, ""),
+                }
+            )
+    return rows
+
+
+def frontend_node_copy_from_backend(backend_node: dict[str, Any], intent_rows: list[dict[str, str]]) -> dict[str, Any]:
+    node = copy.deepcopy(backend_node)
+    node["intentList"] = copy.deepcopy(intent_rows)
+    return node
 
 
 def ensure_knowledge_base_intent(node: dict[str, Any]) -> None:
@@ -588,21 +650,30 @@ def rebuild_ports(existing: dict[str, Any], rows: list[dict[str, str]], target_m
 
 def sync_frontend(front_scene: dict[str, Any], backend_node: dict[str, Any], label_by_intent: dict[str, str]) -> None:
     node_id = backend_node.get("id")
+    existing_front_node: dict[str, Any] | None = None
+    existing_cell_data: dict[str, Any] | None = None
     for index, node in enumerate(front_scene.get("nodeList") or []):
         if node.get("id") == node_id:
-            front_scene["nodeList"][index] = copy.deepcopy(backend_node)
+            existing_front_node = node
             break
 
-    port_rows: list[dict[str, str]] = []
-    target_map: dict[str, str] = {}
-    for item in backend_node.get("intentList") or []:
-        if not isinstance(item, dict):
-            continue
-        for intent_id, target_id in item.items():
-            intent_id = str(intent_id)
-            port_rows.append({"value": intent_id, "label": label_by_intent.get(intent_id, intent_id), "digitSequence": ""})
-            if target_id:
-                target_map[intent_id] = str(target_id)
+    for cell in (front_scene.get("graph") or {}).get("cells") or []:
+        if cell.get("id") == node_id:
+            existing_cell_data = cell.get("data") or {}
+            break
+
+    port_rows = frontend_intent_rows_from_backend(
+        backend_node,
+        label_by_intent,
+        [existing_front_node, existing_cell_data, (existing_cell_data or {}).get("customData")],
+    )
+    target_map = intent_target_map_from_backend(backend_node)
+    frontend_node = frontend_node_copy_from_backend(backend_node, port_rows)
+
+    for index, node in enumerate(front_scene.get("nodeList") or []):
+        if node.get("id") == node_id:
+            front_scene["nodeList"][index] = copy.deepcopy(frontend_node)
+            break
 
     for cell in (front_scene.get("graph") or {}).get("cells") or []:
         if cell.get("id") != node_id:
@@ -616,7 +687,7 @@ def sync_frontend(front_scene: dict[str, Any], backend_node: dict[str, Any], lab
             data["actionName"] = "跳转"
         elif backend_node.get("type") == 2 and backend_node.get("nextType") == 2:
             data["actionName"] = "挂机"
-        data["customData"] = copy.deepcopy(backend_node)
+        data["customData"] = copy.deepcopy(frontend_node)
         data["ports"] = port_rows
         size = cell.get("size") or {}
         cell["ports"] = rebuild_ports(cell.get("ports") or {}, port_rows, target_map, size.get("width", 276), size.get("height", 176))
@@ -885,15 +956,35 @@ def read_knowledge_base_ids(client: Client, ivr_id: int) -> list[int]:
 def sync_matching_to_frontend(front_list: list[dict[str, Any]], backend_node: dict[str, Any]) -> None:
     node_id = backend_node.get("id")
     for scene in front_list:
+        existing_front_node: dict[str, Any] | None = None
+        existing_cell_data: dict[str, Any] | None = None
         for index, node in enumerate(scene.get("nodeList") or []):
             if node.get("id") == node_id:
-                scene["nodeList"][index] = copy.deepcopy(backend_node)
+                existing_front_node = node
                 break
+        for cell in (scene.get("graph") or {}).get("cells") or []:
+            if cell.get("id") == node_id:
+                existing_cell_data = cell.get("data") or {}
+                break
+        rows = frontend_intent_rows_from_backend(
+            backend_node,
+            None,
+            [existing_front_node, existing_cell_data, (existing_cell_data or {}).get("customData")],
+        )
+        frontend_node = frontend_node_copy_from_backend(backend_node, rows)
+        for index, node in enumerate(scene.get("nodeList") or []):
+            if node.get("id") == node_id:
+                scene["nodeList"][index] = copy.deepcopy(frontend_node)
+                break
+        target_map = intent_target_map_from_backend(backend_node)
         for cell in (scene.get("graph") or {}).get("cells") or []:
             if cell.get("id") != node_id:
                 continue
             data = cell.setdefault("data", {})
-            data["customData"] = copy.deepcopy(backend_node)
+            data["customData"] = copy.deepcopy(frontend_node)
+            data["ports"] = copy.deepcopy(rows)
+            size = cell.get("size") or {}
+            cell["ports"] = rebuild_ports(cell.get("ports") or {}, rows, target_map, size.get("width", 276), size.get("height", 176))
 
 
 def apply_knowledge_base_matching(client: Client, ivr_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
