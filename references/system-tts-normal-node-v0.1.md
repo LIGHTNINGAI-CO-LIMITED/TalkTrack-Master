@@ -142,8 +142,9 @@ Canvas-save acceptance:
 - frontend `sceneListFrontend.nodeList` uses option rows with `value`, `label`, and `digitSequence`
 - graph `data.customData.intentList` uses the same frontend option-row shape
 - graph `data.ports`, cell port items, and edge source ports use the same `value`
-- after writing, an unchanged backend save and a simulated page-save rebuild both return success when this check is available
-- if a user keeps an old `/script-graph` browser tab open, refresh before clicking page save because the old tab may still hold stale canvas data
+- after graph-affecting writes, open `/script-graph?ivrId=<ivrId>` and verify the page can save/update from the user's canvas view
+- if real click-save is unavailable, simulated page-save rebuild must return success and the report must state the limitation
+- if a user keeps an old `/script-graph` browser tab open, refresh before clicking page save because stale page memory may overwrite repaired canvas data
 
 ### NLP Trigger Design
 

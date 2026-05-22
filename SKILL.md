@@ -1,6 +1,6 @@
 ---
 name: talktrack-master
-version: v0.4.4
+version: v0.4.5
 github_repo: LIGHTNINGAI-CO-LIMITED/TalkTrack-Master
 github_path: "."
 github_branch: main
@@ -75,7 +75,7 @@ If the bootstrap script is missing in their local skill folder, give them the co
 - Runtime order matters: the system attempts NLP and intent-model matching first; large model intent recognition 2.0 is a semantic fallback for cases NLP cannot match or satisfy. Do not design long NLP triggers and expect 2.0 to compensate for poor first-pass matching.
 - For routed normal nodes, keep the node-level 2.0 execution fields consistent as well: every normal node that can route on user replies must read back with `modelIntentRecognitionEnabled=1` and a non-empty `modelIntentRecognitionConfig` in backend `sceneList`, frontend `sceneListFrontend.nodeList`, and graph `customData`. These node fields do not replace the IVR-level Advanced Settings API call.
 - Keep backend route lists and frontend canvas intent lists in their own shapes. Backend `sceneList.nodeList[].intentList` uses route dictionaries such as `{"27620":"node-xxx"}` / `{"-2":""}` / `{"-1":"node-yyy"}`. Frontend `sceneListFrontend.nodeList[].intentList` and graph `data.customData.intentList` must use option rows with `value`, `label`, and `digitSequence`. Do not deep-copy backend nodes into frontend canvas data without converting `intentList`; the page save logic reads `value` from the frontend list and can rebuild broken routes, causing generic `system error` on save.
-- Before claiming a graph write is safe, simulate or check the page-save shape: every routed frontend node and graph `customData` intent row must have `value`; graph ports / edges must still point to the same targets as backend routes. A backend-only save success is not enough when `sceneListFrontend` was touched.
+- Before claiming a graph write is safe, run canvas-save validation. From the user's perspective, `/script-graph?ivrId=<ivrId>` must open and the page must be able to save/update without `system error` or route/config corruption. If real browser save is unavailable, simulate the page-save shape: every routed frontend node and graph `customData` intent row must have `value`; graph ports / edges must still point to the same targets as backend routes; then state the limitation in the report. A backend-only save success is not enough when `sceneListFrontend` was touched.
 - On Windows, avoid Windows PowerShell 5 inline Chinese JSON for write calls; use Python `requests` or UTF-8 files.
 - Archive final docs, summaries, prompts, SOPs, and reports to `D:\ObsidianVault\闪电智能知识库`, not the repo root.
 
@@ -96,7 +96,7 @@ If the bootstrap script is missing in their local skill folder, give them the co
 10. Enable Advanced Settings large model intent recognition 2.0 with `POST <authenticated-api-base>/ivr/updateModelIntentRecognitionConfig`. Use the target IVR ID as `id`, set `modelIntentRecognitionEnabled=1`, use the approved scene-specific `modelPrompt` and `modelResultFormat`, keep `modelId=55`, timeout `2000`, `modelMaxTokens>=4096`, and `modelRecognitionRound=0`.
 11. Enable or preserve node-level large model intent recognition 2.0 on every normal node that handles user replies. Preserve existing valid node configs; create a node-level `modelIntentRecognitionConfig` from the approved template when it is missing.
 12. Read back with `/ivr/findSceneList/{ivrId}` plus knowledge-base list/detail endpoints when answers are touched. For knowledge-base matching and node-level 2.0, validate backend nodes, frontend node copies, and graph `customData`; for frontend canvas intent lists, validate every intent row has `value`; for Advanced Settings 2.0, validate the IVR-level fields and page echo.
-13. When a page check is needed, inspect `/script-graph?ivrId=<ivrId>`. Current system TTS UI evidence is `试听` / `重新合成`; current NLP UI evidence is checked `匹配知识库` with explicit selected knowledge bases; current 2.0 UI evidence is checked `大模型意图分析2.0`.
+13. For graph-affecting writes, run canvas-save validation at `/script-graph?ivrId=<ivrId>`: refresh any old page tab, confirm UI opens with intended config, click page save/update when available, or run simulated page-save shape validation and report why real click-save was unavailable. Current system TTS UI evidence is `试听` / `重新合成`; current NLP UI evidence is checked `匹配知识库` with explicit selected knowledge bases; current 2.0 UI evidence is checked `大模型意图分析2.0`.
 14. Write redacted reports and indexes to the Obsidian vault, then run `obsidian 'vault=闪电智能知识库' unresolved total`.
 
 ## v0.2 Task Modes
