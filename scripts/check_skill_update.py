@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import re
 import ssl
 import subprocess
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -144,8 +146,16 @@ def request_json(url: str) -> Dict[str, object]:
     return json.loads(request_text(url))
 
 
+def raw_url_for_ref(path: str, ref: str) -> str:
+    return f"https://raw.githubusercontent.com/{REPO}/{ref}/{path}"
+
+
 def raw_url(path: str) -> str:
-    return f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{path}"
+    return raw_url_for_ref(path, BRANCH)
+
+
+def archive_url(ref: str) -> str:
+    return f"https://codeload.github.com/{REPO}/zip/{ref}"
 
 
 def ref_url() -> str:
@@ -276,6 +286,10 @@ def request_remote_file_bytes(path: str) -> bytes:
     try:
         return request_contents_bytes(path)
     except Exception:
+        pass
+    try:
+        return request_bytes(raw_url_for_ref(path, remote_head_sha()))
+    except Exception:
         return request_bytes(raw_url(path))
 
 
@@ -366,6 +380,28 @@ def remote_files() -> Iterable[Tuple[str, str]]:
             yield remote_path, relative_path
 
 
+def remote_archive_files(ref: str) -> Iterable[Tuple[str, bytes]]:
+    data = request_bytes(archive_url(ref))
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = archive.namelist()
+        if not names:
+            raise UpdateCheckError(f"github_archive_empty ref={ref}")
+        top_prefix = names[0].split("/", 1)[0] + "/"
+        remote_prefix = f"{REMOTE_PREFIX}/" if REMOTE_PREFIX else ""
+        for name in names:
+            if name.endswith("/") or not name.startswith(top_prefix):
+                continue
+            repo_path = name[len(top_prefix):].replace("\\", "/")
+            if REMOTE_PREFIX:
+                if not repo_path.startswith(remote_prefix):
+                    continue
+                relative_path = repo_path[len(remote_prefix):]
+            else:
+                relative_path = repo_path
+            if allowed_relative_path(relative_path):
+                yield relative_path, archive.read(name)
+
+
 def apply_update(force: bool = False) -> List[str]:
     status = get_status()
     if status["status"] == "local_newer" and not force:
@@ -373,11 +409,21 @@ def apply_update(force: bool = False) -> List[str]:
             "remote_version_is_older; refusing_to_downgrade_without_--force"
         )
 
+    try:
+        file_items = [
+            (relative_path, request_remote_file_bytes(remote_path))
+            for remote_path, relative_path in remote_files()
+        ]
+    except Exception:
+        file_items = list(remote_archive_files(remote_head_sha()))
+    if not file_items:
+        raise UpdateCheckError("remote_skill_files_empty")
+
     updated: List[str] = []
-    for remote_path, relative_path in remote_files():
+    for relative_path, content in file_items:
         target_path = LOCAL_ROOT / Path(relative_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(request_remote_file_bytes(remote_path))
+        target_path.write_bytes(content)
         updated.append(relative_path)
     return sorted(updated)
 

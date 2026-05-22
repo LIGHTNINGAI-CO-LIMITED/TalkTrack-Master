@@ -1,6 +1,6 @@
 ---
 name: talktrack-master
-version: v0.4.5
+version: v0.4.6
 github_repo: LIGHTNINGAI-CO-LIMITED/TalkTrack-Master
 github_path: "."
 github_branch: main
