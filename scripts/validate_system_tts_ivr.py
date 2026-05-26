@@ -60,6 +60,7 @@ MODEL_INTENT_PROMPT = """# 角色设定：你是一名客服助手，专注于�
 """
 DEFAULT_MODEL_ID = 55
 DEFAULT_MODEL_NAME = "闪电26BMoE-fast"
+KEYPAD_PORT_GROUP = "keypadPort"
 DEFAULT_MODEL_RESULT_FORMAT = json.dumps([{"intentName": "肯定/默认"}], ensure_ascii=False, separators=(",", ":"))
 
 
@@ -112,6 +113,52 @@ def is_default_model_id(value: Any) -> bool:
         return int(value) == DEFAULT_MODEL_ID
     except (TypeError, ValueError):
         return False
+
+
+def default_keypad_port_group() -> dict[str, Any]:
+    return {
+        "position": {"name": "absolute"},
+        "attrs": {
+            "circle": {
+                "r": 5,
+                "magnet": True,
+                "stroke": "#1677ff",
+                "strokeWidth": 2,
+                "fill": "#fff",
+            }
+        },
+    }
+
+
+def graph_cell_port_summary(cell: dict[str, Any] | None) -> dict[str, Any]:
+    if not cell:
+        return {
+            "exists": False,
+            "hasKeypadPortGroup": False,
+            "usesGenericInOutPortGroups": False,
+            "portItemGroups": [],
+            "allItemsUseKeypadPort": False,
+            "portItemIds": [],
+            "hasPosition": False,
+            "hasSize": False,
+            "shape": None,
+        }
+    ports = cell.get("ports") if isinstance(cell.get("ports"), dict) else {}
+    groups = ports.get("groups") if isinstance(ports.get("groups"), dict) else {}
+    items = ports.get("items") if isinstance(ports.get("items"), list) else []
+    item_groups = sorted({str(item.get("group") or "") for item in items if isinstance(item, dict)})
+    item_ids = [str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id") is not None]
+    return {
+        "exists": True,
+        "hasKeypadPortGroup": KEYPAD_PORT_GROUP in groups,
+        "usesGenericInOutPortGroups": "in" in groups or "out" in groups or "in" in item_groups or "out" in item_groups,
+        "portItemGroups": item_groups,
+        "allItemsUseKeypadPort": bool(items) and all(isinstance(item, dict) and item.get("group") == KEYPAD_PORT_GROUP for item in items),
+        "portItemIds": item_ids,
+        "hasPosition": isinstance(cell.get("position"), dict),
+        "hasSize": isinstance(cell.get("size"), dict),
+        "shape": cell.get("shape"),
+    }
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -666,20 +713,11 @@ def find_node(nodes: list[dict[str, Any]], node_id: str) -> dict[str, Any]:
 
 
 def rebuild_ports(existing: dict[str, Any], rows: list[dict[str, str]], target_map: dict[str, str], width: float, height: float) -> dict[str, Any]:
-    groups = existing.get("groups") or {
-        "keypadPort": {
-            "position": {"name": "absolute"},
-            "attrs": {
-                "circle": {
-                    "r": 5,
-                    "magnet": True,
-                    "stroke": "#1677ff",
-                    "strokeWidth": 2,
-                    "fill": "#fff",
-                }
-            },
-        }
-    }
+    groups = copy.deepcopy(existing.get("groups") or {})
+    groups.pop("in", None)
+    groups.pop("out", None)
+    if KEYPAD_PORT_GROUP not in groups:
+        groups[KEYPAD_PORT_GROUP] = default_keypad_port_group()
     items = []
     count = max(len(rows), 1)
     for index, row in enumerate(rows):
@@ -687,7 +725,7 @@ def rebuild_ports(existing: dict[str, Any], rows: list[dict[str, str]], target_m
         items.append(
             {
                 "id": port_id,
-                "group": "keypadPort",
+                "group": KEYPAD_PORT_GROUP,
                 "args": {"x": width, "y": round((index + 1) * height / (count + 1), 2)},
                 "attrs": {"text": {"text": row.get("label", port_id)}},
                 "data": {"targetNodeId": target_map.get(port_id, "")},
@@ -1115,9 +1153,11 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
     for key, node_id in scene_meta["nodeIdByKey"].items():
         node = nodes_by_id.get(node_id) or {}
         front_node = front_nodes_by_id.get(node_id) or {}
-        graph_custom = (((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {})
+        graph_cell = graph_by_id.get(node_id) or {}
+        graph_custom = (((graph_cell or {}).get("data") or {}).get("customData") or {})
         if not isinstance(graph_custom, dict):
             graph_custom = {}
+        port_summary = graph_cell_port_summary(graph_cell)
         tts_list = node.get("ttsPlaybackList") or []
         node_summary.append(
             {
@@ -1156,6 +1196,14 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
                 "graphModelIntentRecognitionConfigPresent": bool(graph_custom.get("modelIntentRecognitionConfig")),
                 "graphModelIntentRecognitionModelId": model_config_id(graph_custom.get("modelIntentRecognitionConfig")),
                 "graphCustomDataNextNodeId": graph_custom.get("nextNodeId"),
+                "graphHasKeypadPortGroup": port_summary.get("hasKeypadPortGroup"),
+                "graphUsesGenericInOutPortGroups": port_summary.get("usesGenericInOutPortGroups"),
+                "graphPortItemGroups": port_summary.get("portItemGroups"),
+                "graphAllItemsUseKeypadPort": port_summary.get("allItemsUseKeypadPort"),
+                "graphPortItemIds": port_summary.get("portItemIds"),
+                "graphHasPosition": port_summary.get("hasPosition"),
+                "graphHasSize": port_summary.get("hasSize"),
+                "graphShape": port_summary.get("shape"),
             }
         )
 
@@ -1214,6 +1262,9 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
     for edge in edge_cells:
         source = edge.get("source") or {}
         target = edge.get("target") or {}
+        source_cell = graph_by_id.get(source.get("cell")) or {}
+        source_ports = set(graph_cell_port_summary(source_cell).get("portItemIds") or [])
+        source_port = str(source.get("port") or "")
         edge_checks.append(
             {
                 "sourceCell": source.get("cell"),
@@ -1221,6 +1272,7 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
                 "targetCell": target.get("cell"),
                 "sourceExists": source.get("cell") in node_ids,
                 "targetExists": target.get("cell") in node_ids,
+                "sourcePortExists": bool(source_port and source_port in source_ports),
             }
         )
 
@@ -1250,6 +1302,16 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
             failures.append(f"node {key} frontend 2.0 model is not {DEFAULT_MODEL_NAME}({DEFAULT_MODEL_ID})")
         if graph_uses_model_2 and not is_default_model_id(item.get("graphModelIntentRecognitionModelId")):
             failures.append(f"node {key} graph 2.0 model is not {DEFAULT_MODEL_NAME}({DEFAULT_MODEL_ID})")
+        routed_graph_node = bool(item.get("intentList")) or int(item.get("nextType") or 0) == 1
+        if routed_graph_node and item.get("graphCellExists"):
+            if not item.get("graphHasKeypadPortGroup"):
+                failures.append(f"node {key} graph ports missing {KEYPAD_PORT_GROUP}")
+            if item.get("graphUsesGenericInOutPortGroups"):
+                failures.append(f"node {key} graph ports use generic in/out groups instead of {KEYPAD_PORT_GROUP}")
+            if item.get("graphPortItemIds") and not item.get("graphAllItemsUseKeypadPort"):
+                failures.append(f"node {key} graph port items are not all {KEYPAD_PORT_GROUP}")
+            if not item.get("graphHasPosition") or not item.get("graphHasSize"):
+                failures.append(f"node {key} graph cell missing position/size render fields")
         if key in normal_keys:
             if int(item.get("type") or 0) != 1:
                 failures.append(f"普通节点 {key} type != 1")
@@ -1291,6 +1353,8 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
     for edge in edge_checks:
         if not edge.get("sourceExists") or not edge.get("targetExists"):
             failures.append(f"graph edge source/target 不存在: {edge}")
+        if edge.get("sourceExists") and not edge.get("sourcePortExists"):
+            failures.append(f"graph edge source port 不存在或端口结构异常: {edge}")
     for kb in kb_summary:
         if not kb.get("found"):
             failures.append(f"知识库未读回: {kb.get('title')}")
@@ -1326,7 +1390,7 @@ def markdown_table(rows: list[list[Any]]) -> str:
 def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> None:
     validation = report.get("validation") or {}
     parsed = report.get("parsed") or {}
-    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "2.0模型后端", "2.0模型前端", "2.0模型画布", "nextType", "nextNodeId"]]
+    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "2.0模型后端", "2.0模型前端", "2.0模型画布", "画布端口", "nextType", "nextNodeId"]]
     for item in validation.get("nodeSummary") or []:
         node_rows.append([
             item.get("nodeKey"),
@@ -1344,6 +1408,7 @@ def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> 
             item.get("modelIntentRecognitionModelId") or "",
             item.get("frontendModelIntentRecognitionModelId") or "",
             item.get("graphModelIntentRecognitionModelId") or "",
+            bool(item.get("graphHasKeypadPortGroup") and not item.get("graphUsesGenericInOutPortGroups") and (not item.get("graphPortItemIds") or item.get("graphAllItemsUseKeypadPort"))),
             item.get("nextType") or "",
             item.get("nextNodeId") or "",
         ])

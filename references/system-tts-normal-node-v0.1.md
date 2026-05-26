@@ -144,10 +144,33 @@ Canvas-save acceptance:
 - frontend `sceneListFrontend.nodeList` uses option rows with `value`, `label`, and `digitSequence`
 - graph `data.customData.intentList` uses the same frontend option-row shape
 - graph `data.ports`, cell port items, and edge source ports use the same `value`
+- graph node cells preserve the page-native render shape: routed ordinary-node / jump-node cells must use `ports.groups.keypadPort` and port items with `group="keypadPort"`, not generic `in` / `out` groups
+- graph node cells preserve existing render-only fields from the pre-write snapshot, including `position`, `size`, `shape`, `attrs`, `zIndex`, and hidden cell data that the page depends on
 - `兜底` / `-1`, when present, is only a fallback route and is not included in NLP / 2.0 business-intent candidates
 - after graph-affecting writes, open `/script-graph?ivrId=<ivrId>` and verify the page can save/update from the user's canvas view
 - if real click-save is unavailable, simulated page-save rebuild must return success and the report must state the limitation
 - if a user keeps an old `/script-graph` browser tab open, refresh before clicking page save because stale page memory may overwrite repaired canvas data
+
+### Frontend Canvas Render Shape / Port Schema
+
+The canvas is rendered from `sceneListFrontend.graph.cells`, not directly from backend `sceneList`. A backend readback with all nodes present does not prove that the user's canvas can render.
+
+Do not reconstruct graph node cells from a generic X6 / diagram template. The current page expects routed normal-node / jump-node cells to use the platform-specific `keypadPort` schema. Replacing it with generic groups such as `in` / `out` can make the central canvas look empty even when `sceneList` still contains every backend node.
+
+Safe update rule:
+
+- Start from the current readback or the pre-write snapshot.
+- Patch only the business fields that must change, such as `data.customData`, `data.ports` option rows, node label text, knowledge-base matching fields, and node-level 2.0 config.
+- Preserve the existing cell `id`, `shape`, `position`, `size`, `attrs`, `zIndex`, and existing page-native port groups.
+- If a new routed port must be added, add it under `keypadPort`; do not introduce `in` / `out`.
+- For production or existing IVRs, prefer restoring render-only fields from the pre-write snapshot after business-field updates.
+
+Hard failure conditions:
+
+- `sceneList` has nodes but `sceneListFrontend.graph.cells` has no corresponding node cells.
+- A routed graph node cell uses `ports.groups.in` / `ports.groups.out` instead of `ports.groups.keypadPort`.
+- A graph edge `source.port` references a port ID that is absent from the source node's `ports.items`.
+- Page opens `/script-graph?ivrId=<ivrId>` but the center canvas is blank while the left scene list still shows scenes.
 
 ### NLP Trigger Design
 
