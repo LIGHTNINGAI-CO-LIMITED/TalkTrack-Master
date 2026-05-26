@@ -213,7 +213,7 @@ Parameter rules:
 - `modelIntentRecognitionTimeoutMilliSecond=2000`.
 - `modelPrompt` must be adapted to the current scene.
 - `modelPrompt` must state that `兜底` is not an output intent; unclear/no-match cases should fall through to the system fallback route instead of returning `兜底`.
-- `modelId=55` is fixed.
+- `modelId=55` is fixed and corresponds to `闪电26BMoE-fast`.
 - `modelTemperature` is in `[0,2)`.
 - `modelPresencePenalty` is in `[-2,2]`.
 - `modelMaxTokens` must be at least `4096`; do not send `0` for an enabled configuration.
@@ -239,11 +239,14 @@ For every normal node that can route on user replies, also preserve or create th
 
 - `modelIntentRecognitionEnabled=1`
 - non-empty `modelIntentRecognitionConfig`
+- `modelIntentRecognitionConfig.modelConfig.id=55`, corresponding to `闪电26BMoE-fast`
 - the same enabled/config state in backend `sceneList`
 - the same enabled/config state in frontend `sceneListFrontend.nodeList`
 - the same enabled/config state in frontend graph `data.customData`
 
-When an existing valid `modelIntentRecognitionConfig` is present, preserve it and only fix the switch if needed. When a routed normal node is missing the config, create it from the approved 2.0 template and use the node's available intent labels to choose a valid `resultFormat` example. Do not claim Advanced Settings 2.0 completion from node-level fields alone, and do not claim routed-node completion from the IVR-level switch alone.
+When an existing valid `modelIntentRecognitionConfig` is present, preserve its prompt and result format, but still force the model selection to `modelConfig.id=55`. Do this in backend `sceneList`, frontend `sceneListFrontend.nodeList`, and graph `customData`; otherwise the page can show later nodes using another model even when the first node is correct. Do not rely on page defaults, copy-order inheritance, or "the first node already uses the right model". When a routed normal node is missing the config, create it from the approved 2.0 template and use the node's available intent labels to choose a valid `resultFormat` example. Do not claim Advanced Settings 2.0 completion from node-level fields alone, and do not claim routed-node completion from the IVR-level switch alone.
+
+For jump nodes, only apply node-level 2.0 when the product surface actually enables 2.0 on that jump node. If a jump node has `modelIntentRecognitionEnabled=1` or a non-empty `modelIntentRecognitionConfig`, it must follow the same `modelConfig.id=55` / `闪电26BMoE-fast` rule and must be read back in backend, frontend, and graph copies.
 
 ## Optional Human-Confirmed Features
 
@@ -255,6 +258,13 @@ These can be drafted but need human confirmation before final write:
 - inferred branch mapping from unclear source material
 
 For model intent recognition 2.0, API `success` is not enough. Require page echo and `/ivr/findSceneList/{ivrId}` readback before claiming the IVR-level switch and routed-node fields landed.
+
+Readback failures that must block acceptance:
+
+- IVR-level `modelId` is not `55`.
+- Any normal node or 2.0-enabled jump node has `modelIntentRecognitionConfig.modelConfig.id` missing or not equal to `55`.
+- Backend, frontend node copy, and graph `customData` disagree on the node-level model ID.
+- The UI edit dialog for a sampled node shows a model other than `闪电26BMoE-fast`.
 
 ## Page Spot Check
 

@@ -59,6 +59,7 @@ MODEL_INTENT_PROMPT = """# 角色设定：你是一名客服助手，专注于�
 只输出结果，禁止输出其他内容，输出示例：{resultFormat}
 """
 DEFAULT_MODEL_ID = 55
+DEFAULT_MODEL_NAME = "闪电26BMoE-fast"
 DEFAULT_MODEL_RESULT_FORMAT = json.dumps([{"intentName": "肯定/默认"}], ensure_ascii=False, separators=(",", ":"))
 
 
@@ -86,6 +87,31 @@ def safe_json_loads(value: Any, default: Any) -> Any:
     if isinstance(value, str) and value.strip():
         return json.loads(value)
     return default
+
+
+def load_model_intent_config(value: Any) -> dict[str, Any]:
+    try:
+        data = safe_json_loads(value, {})
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def model_config_id(value: Any) -> Any:
+    cfg = load_model_intent_config(value)
+    if not cfg:
+        return None
+    model_cfg = cfg.get("modelConfig")
+    if isinstance(model_cfg, dict):
+        return model_cfg.get("id") if model_cfg.get("id") is not None else model_cfg.get("modelId")
+    return cfg.get("id") if cfg.get("id") is not None else cfg.get("modelId")
+
+
+def is_default_model_id(value: Any) -> bool:
+    try:
+        return int(value) == DEFAULT_MODEL_ID
+    except (TypeError, ValueError):
+        return False
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -370,10 +396,31 @@ def make_model_intent_config(result_label: str = "肯定/默认", model_id: int 
     }
 
 
+def normalize_model_intent_config(node: dict[str, Any], result_label: str = "肯定/默认") -> None:
+    template = make_model_intent_config(result_label)
+    cfg = load_model_intent_config(node.get("modelIntentRecognitionConfig"))
+    if not cfg:
+        node["modelIntentRecognitionConfig"] = template
+        return
+
+    cfg.setdefault("modelTimeoutMilliSecond", template["modelTimeoutMilliSecond"])
+    if not isinstance(cfg.get("modelConfig"), dict):
+        cfg["modelConfig"] = {}
+    model_cfg = cfg["modelConfig"]
+    for key, value in template["modelConfig"].items():
+        if model_cfg.get(key) in (None, ""):
+            model_cfg[key] = value
+    # Node-level 2.0 must always use 闪电26BMoE-fast. Existing prompts and
+    # result formats are preserved, but stale model selections are corrected.
+    model_cfg["id"] = DEFAULT_MODEL_ID
+    if "modelId" in model_cfg:
+        model_cfg["modelId"] = DEFAULT_MODEL_ID
+    node["modelIntentRecognitionConfig"] = cfg
+
+
 def enable_model_intent_2(node: dict[str, Any], result_label: str = "肯定/默认") -> None:
     node["modelIntentRecognitionEnabled"] = 1
-    if not node.get("modelIntentRecognitionConfig"):
-        node["modelIntentRecognitionConfig"] = make_model_intent_config(result_label)
+    normalize_model_intent_config(node, result_label)
 
 
 def make_ivr_model_intent_payload(
@@ -1067,6 +1114,10 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
     node_summary = []
     for key, node_id in scene_meta["nodeIdByKey"].items():
         node = nodes_by_id.get(node_id) or {}
+        front_node = front_nodes_by_id.get(node_id) or {}
+        graph_custom = (((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {})
+        if not isinstance(graph_custom, dict):
+            graph_custom = {}
         tts_list = node.get("ttsPlaybackList") or []
         node_summary.append(
             {
@@ -1087,21 +1138,24 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
                 "knowledgeBaseMatchListCount": len(node.get("knowledgeBaseMatchList") or []),
                 "modelIntentRecognitionEnabled": node.get("modelIntentRecognitionEnabled"),
                 "modelIntentRecognitionConfigPresent": bool(node.get("modelIntentRecognitionConfig")),
+                "modelIntentRecognitionModelId": model_config_id(node.get("modelIntentRecognitionConfig")),
                 "frontendNodeExists": node_id in front_nodes_by_id,
                 "graphCellExists": node_id in graph_by_id,
-                "frontendHasKnowledgeBaseIntent": has_intent(front_nodes_by_id.get(node_id) or {}, "-2"),
-                "frontendMatchKnowledgeBaseEnabled": (front_nodes_by_id.get(node_id) or {}).get("matchKnowledgeBaseEnabled"),
-                "frontendKnowledgeBaseMatchType": (front_nodes_by_id.get(node_id) or {}).get("knowledgeBaseMatchType"),
-                "frontendKnowledgeBaseMatchListCount": len((front_nodes_by_id.get(node_id) or {}).get("knowledgeBaseMatchList") or []),
-                "graphHasKnowledgeBaseIntent": has_intent((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}) if isinstance((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}), dict) else {}, "-2"),
-                "graphMatchKnowledgeBaseEnabled": (((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}).get("matchKnowledgeBaseEnabled") if isinstance((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}), dict) else None,
-                "graphKnowledgeBaseMatchType": (((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}).get("knowledgeBaseMatchType") if isinstance((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}), dict) else None,
-                "graphKnowledgeBaseMatchListCount": len(((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}).get("knowledgeBaseMatchList") or []) if isinstance((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}), dict) else []),
-                "frontendModelIntentRecognitionEnabled": (front_nodes_by_id.get(node_id) or {}).get("modelIntentRecognitionEnabled"),
-                "frontendModelIntentRecognitionConfigPresent": bool((front_nodes_by_id.get(node_id) or {}).get("modelIntentRecognitionConfig")),
-                "graphModelIntentRecognitionEnabled": (((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}).get("modelIntentRecognitionEnabled") if isinstance((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}), dict) else None,
-                "graphModelIntentRecognitionConfigPresent": bool(((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}).get("modelIntentRecognitionConfig")) if isinstance((((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData") or {}), dict) else False),
-                "graphCustomDataNextNodeId": ((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData", {}).get("nextNodeId") if isinstance(((graph_by_id.get(node_id) or {}).get("data") or {}).get("customData"), dict) else None,
+                "frontendHasKnowledgeBaseIntent": has_intent(front_node, "-2"),
+                "frontendMatchKnowledgeBaseEnabled": front_node.get("matchKnowledgeBaseEnabled"),
+                "frontendKnowledgeBaseMatchType": front_node.get("knowledgeBaseMatchType"),
+                "frontendKnowledgeBaseMatchListCount": len(front_node.get("knowledgeBaseMatchList") or []),
+                "graphHasKnowledgeBaseIntent": has_intent(graph_custom, "-2"),
+                "graphMatchKnowledgeBaseEnabled": graph_custom.get("matchKnowledgeBaseEnabled"),
+                "graphKnowledgeBaseMatchType": graph_custom.get("knowledgeBaseMatchType"),
+                "graphKnowledgeBaseMatchListCount": len(graph_custom.get("knowledgeBaseMatchList") or []),
+                "frontendModelIntentRecognitionEnabled": front_node.get("modelIntentRecognitionEnabled"),
+                "frontendModelIntentRecognitionConfigPresent": bool(front_node.get("modelIntentRecognitionConfig")),
+                "frontendModelIntentRecognitionModelId": model_config_id(front_node.get("modelIntentRecognitionConfig")),
+                "graphModelIntentRecognitionEnabled": graph_custom.get("modelIntentRecognitionEnabled"),
+                "graphModelIntentRecognitionConfigPresent": bool(graph_custom.get("modelIntentRecognitionConfig")),
+                "graphModelIntentRecognitionModelId": model_config_id(graph_custom.get("modelIntentRecognitionConfig")),
+                "graphCustomDataNextNodeId": graph_custom.get("nextNodeId"),
             }
         )
 
@@ -1187,6 +1241,15 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
     end_keys = {item["key"] for item in parsed["endNodes"]}
     for item in node_summary:
         key = item["nodeKey"]
+        backend_uses_model_2 = int(item.get("modelIntentRecognitionEnabled") or 0) == 1 or bool(item.get("modelIntentRecognitionConfigPresent"))
+        frontend_uses_model_2 = int(item.get("frontendModelIntentRecognitionEnabled") or 0) == 1 or bool(item.get("frontendModelIntentRecognitionConfigPresent"))
+        graph_uses_model_2 = int(item.get("graphModelIntentRecognitionEnabled") or 0) == 1 or bool(item.get("graphModelIntentRecognitionConfigPresent"))
+        if backend_uses_model_2 and not is_default_model_id(item.get("modelIntentRecognitionModelId")):
+            failures.append(f"node {key} backend 2.0 model is not {DEFAULT_MODEL_NAME}({DEFAULT_MODEL_ID})")
+        if frontend_uses_model_2 and not is_default_model_id(item.get("frontendModelIntentRecognitionModelId")):
+            failures.append(f"node {key} frontend 2.0 model is not {DEFAULT_MODEL_NAME}({DEFAULT_MODEL_ID})")
+        if graph_uses_model_2 and not is_default_model_id(item.get("graphModelIntentRecognitionModelId")):
+            failures.append(f"node {key} graph 2.0 model is not {DEFAULT_MODEL_NAME}({DEFAULT_MODEL_ID})")
         if key in normal_keys:
             if int(item.get("type") or 0) != 1:
                 failures.append(f"普通节点 {key} type != 1")
@@ -1263,7 +1326,7 @@ def markdown_table(rows: list[list[Any]]) -> str:
 def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> None:
     validation = report.get("validation") or {}
     parsed = report.get("parsed") or {}
-    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "nextType", "nextNodeId"]]
+    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "2.0模型后端", "2.0模型前端", "2.0模型画布", "nextType", "nextNodeId"]]
     for item in validation.get("nodeSummary") or []:
         node_rows.append([
             item.get("nodeKey"),
@@ -1278,6 +1341,9 @@ def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> 
             bool(int(item.get("modelIntentRecognitionEnabled") or 0) == 1 and item.get("modelIntentRecognitionConfigPresent")),
             bool(int(item.get("frontendModelIntentRecognitionEnabled") or 0) == 1 and item.get("frontendModelIntentRecognitionConfigPresent")),
             bool(int(item.get("graphModelIntentRecognitionEnabled") or 0) == 1 and item.get("graphModelIntentRecognitionConfigPresent")),
+            item.get("modelIntentRecognitionModelId") or "",
+            item.get("frontendModelIntentRecognitionModelId") or "",
+            item.get("graphModelIntentRecognitionModelId") or "",
             item.get("nextType") or "",
             item.get("nextNodeId") or "",
         ])
