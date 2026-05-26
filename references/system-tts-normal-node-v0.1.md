@@ -1,15 +1,16 @@
 # System TTS Normal Node v0.1
 
-This reference is for Shandian Intelligent backend work at:
+This reference is for Shandian Intelligent backend work on the domestic or overseas admin backend:
 
-`https://ai.sd6g.com:1904/api/web`
+- domestic API: `https://ai.sd6g.com:1904/api/web`
+- overseas API: `https://ai.tbot360.com/api/web`
 
 Use it for TalkTrack-Master v0.1 tasks involving normal nodes, jump nodes, end nodes, system TTS, and knowledge-base answers.
 
 ## Safety
 
-- Header: `token: Bearer <TOKEN>`.
-- Validate first: `GET /account/findInfo`; continue only when response `code=0`.
+- Header: `token: Bearer <TOKEN>`, not raw `token: <TOKEN>` and not `Authorization`.
+- Resolve backend first. If the user provides a URL, infer domestic from `ai.sd6g.com:1904` and overseas from `ai.tbot360.com`. If the user only provides a token, normalize raw 32-hex / `Bearer ...` / `token=Bearer%20...` / curl header text and probe both backends with `GET /account/findInfo`; continue only when the selected or single matching backend returns `code=0`.
 - Do not store real token values in scripts, reports, logs, screenshots, Markdown, JSON, or final replies.
 - Use a new test IVR unless the user explicitly authorizes editing a target IVR.
 - Snapshot before write with `GET /ivr/findSceneList/{ivrId}`.
@@ -194,18 +195,19 @@ For normal-node and jump-node talktrack work, enable Advanced Settings large mod
 Use this IVR-level endpoint path for the page Advanced Settings switch:
 
 ```text
-POST <authenticated-api-base>/ivr/updateModelIntentRecognitionConfig
+POST <resolved-api-base>/ivr/updateModelIntentRecognitionConfig
 ```
 
 Required request headers still use `token: Bearer <TOKEN>`.
 
-For the current Obsidian `testtoken`, the verified API base is:
+Resolved API base examples:
 
 ```text
 https://ai.sd6g.com:1904/api/web
+https://ai.tbot360.com/api/web
 ```
 
-The customer-provided `https://aicc-test.sd6g.com/api/web` host can use the same path only when the access token is valid for that host; otherwise it may return `code=7 invalid credential`.
+`code=7 invalid credential` usually means the token was not normalized, the wrong header was used, or the token belongs to the other backend. Only treat it as an expired token after `token: Bearer <TOKEN>` fails on the intended backend.
 
 Required payload shape:
 
@@ -293,7 +295,7 @@ Readback failures that must block acceptance:
 
 Open:
 
-`https://ai.sd6g.com:1904/script-graph?ivrId=<ivrId>`
+`<resolved-web-base>/script-graph?ivrId=<ivrId>`
 
 Current system TTS UI evidence:
 

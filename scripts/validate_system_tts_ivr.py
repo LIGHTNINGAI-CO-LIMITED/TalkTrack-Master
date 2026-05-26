@@ -21,14 +21,22 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import requests
 from docx import Document
 
 
-BASE_URL = "https://ai.sd6g.com:1904/api/web"
-SCRIPT_GRAPH_URL = "https://ai.sd6g.com:1904/script-graph"
-MODEL_INTENT_CONFIG_URL = f"{BASE_URL}/ivr/updateModelIntentRecognitionConfig"
+BACKENDS = {
+    "domestic": {
+        "webBase": "https://ai.sd6g.com:1904",
+        "apiBase": "https://ai.sd6g.com:1904/api/web",
+    },
+    "overseas": {
+        "webBase": "https://ai.tbot360.com",
+        "apiBase": "https://ai.tbot360.com/api/web",
+    },
+}
 TEMPLATE_IVR_ID = 3471
 DEFAULT_TTS_VOICE_ID = 1
 DEFAULT_SPEECH_RATE = 1
@@ -78,6 +86,62 @@ def sha256_text(value: str) -> str:
 
 def ok_code(data: dict[str, Any]) -> bool:
     return str(data.get("code")) == "0"
+
+
+def extract_access_token(value: str) -> str:
+    decoded = unquote((value or "").strip())
+    match = re.search(r"[0-9a-fA-F]{32}", decoded)
+    if match:
+        return match.group(0)
+    decoded = re.sub(r"^\s*token\s*=\s*", "", decoded, flags=re.I)
+    decoded = re.sub(r"^\s*Bearer\s+", "", decoded, flags=re.I).strip().strip("\"'")
+    match = re.search(r"[A-Za-z0-9._-]{20,}", decoded)
+    if match:
+        return match.group(0)
+    raise RuntimeError("No usable access token found. Paste a token, token=Bearer%20..., or -H 'token: Bearer ...'.")
+
+
+def backend_from_url(value: str) -> str | None:
+    lower = (value or "").lower()
+    if "ai.sd6g.com:1904" in lower or "sd6g.com:1904" in lower:
+        return "domestic"
+    if "ai.tbot360.com" in lower or "tbot360.com" in lower:
+        return "overseas"
+    return None
+
+
+def probe_backend(region: str, token: str) -> dict[str, Any]:
+    meta = BACKENDS[region]
+    headers = {"token": f"Bearer {token}", "X-Requested-With": "XMLHttpRequest"}
+    try:
+        response = requests.get(f"{meta['apiBase']}/account/findInfo", headers=headers, timeout=20)
+        response.encoding = "utf-8"
+        data = response.json()
+    except Exception as exc:
+        return {"region": region, "ok": False, "error": type(exc).__name__}
+    return {"region": region, "ok": ok_code(data), "code": data.get("code"), "data": data.get("data") or {}}
+
+
+def resolve_backend(token_text: str, backend_region: str = "auto", backend_url: str = "") -> dict[str, Any]:
+    token = extract_access_token(token_text)
+    hinted = backend_from_url(backend_url)
+    if backend_region != "auto" and hinted and backend_region != hinted:
+        raise RuntimeError(f"backend region conflict: --backend-region={backend_region}, --backend-url points to {hinted}")
+    if backend_region != "auto":
+        candidates = [backend_region]
+    elif hinted:
+        candidates = [hinted]
+    else:
+        candidates = list(BACKENDS)
+    probes = [probe_backend(region, token) for region in candidates]
+    ok = [item for item in probes if item.get("ok")]
+    if not ok:
+        raise RuntimeError(f"token validation failed for candidate backends: {probes}")
+    if len(ok) > 1:
+        raise RuntimeError("token validates against multiple backends; pass --backend-region domestic or overseas")
+    region = ok[0]["region"]
+    meta = BACKENDS[region]
+    return {"region": region, "token": token, "webBase": meta["webBase"], "apiBase": meta["apiBase"], "accountInfo": ok[0]}
 
 
 def safe_json_loads(value: Any, default: Any) -> Any:
@@ -375,18 +439,27 @@ def parse_warnings(*values: Any) -> list[str]:
 
 
 class Client:
-    def __init__(self, token: str):
+    def __init__(self, token: str, backend: dict[str, Any]):
+        self.backend = backend
+        self.base_url = backend["apiBase"]
+        self.web_base = backend["webBase"]
         self.headers = {
             "token": f"Bearer {token}",
             "X-Requested-With": "XMLHttpRequest",
         }
 
+    def url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
+
+    def script_graph_url(self, ivr_id: int) -> str:
+        return f"{self.web_base}/script-graph?ivrId={ivr_id}"
+
     def get(self, path: str, timeout: int = 60) -> dict[str, Any]:
-        response = requests.get(f"{BASE_URL}{path}", headers=self.headers, timeout=timeout)
+        response = requests.get(self.url(path), headers=self.headers, timeout=timeout)
         return self._json(response, path)
 
     def post(self, path: str, body: Any | None = None, timeout: int = 90) -> dict[str, Any]:
-        response = requests.post(f"{BASE_URL}{path}", headers=self.headers, json=body, timeout=timeout)
+        response = requests.post(self.url(path), headers=self.headers, json=body, timeout=timeout)
         return self._json(response, path)
 
     def post_url(self, url: str, body: Any | None = None, timeout: int = 90) -> dict[str, Any]:
@@ -496,11 +569,12 @@ def make_ivr_model_intent_payload(
 
 def update_ivr_model_intent_recognition_config(client: Client, ivr_id: int) -> dict[str, Any]:
     payload = make_ivr_model_intent_payload(ivr_id)
-    updated = client.post_url(MODEL_INTENT_CONFIG_URL, payload, timeout=120)
+    model_intent_config_url = client.url("/ivr/updateModelIntentRecognitionConfig")
+    updated = client.post_url(model_intent_config_url, payload, timeout=120)
     Client.assert_ok(updated, "update IVR model intent recognition 2.0")
     return {
         "updateModelIntentRecognitionConfig": updated,
-        "modelIntentRecognitionConfigUrl": MODEL_INTENT_CONFIG_URL,
+        "modelIntentRecognitionConfigUrl": model_intent_config_url,
         "modelIntentRecognitionPayloadSummary": {
             "id": ivr_id,
             "modelIntentRecognitionEnabled": 1,
@@ -1523,9 +1597,10 @@ source: [[普通节点配置Skill_v0.1范围与验收_20260512]]
     report_path.write_text(md, encoding="utf-8")
 
 
-def run_online(args: argparse.Namespace, parsed: dict[str, Any], token: str) -> dict[str, Any]:
-    client = Client(token)
-    account = client.get("/account/findInfo")
+def run_online(args: argparse.Namespace, parsed: dict[str, Any], token_text: str) -> dict[str, Any]:
+    backend = resolve_backend(token_text, args.backend_region, args.backend_url)
+    client = Client(backend["token"], backend)
+    account = {"code": backend["accountInfo"].get("code"), "data": backend["accountInfo"].get("data") or {}}
     Client.assert_ok(account, "validate token")
     voices = client.get("/ivr/findAllTtsVoiceBaseInfo")
     Client.assert_ok(voices, "read voice list")
@@ -1551,9 +1626,14 @@ def run_online(args: argparse.Namespace, parsed: dict[str, Any], token: str) -> 
     report = {
         "generatedAt": dt.datetime.now().isoformat(timespec="seconds"),
         "mode": "online",
+        "backend": {
+            "region": backend["region"],
+            "apiBase": backend["apiBase"],
+            "webBase": backend["webBase"],
+        },
         "ivrId": ivr_id,
         "ivrName": ivr_name,
-        "scriptGraphUrl": f"{SCRIPT_GRAPH_URL}?ivrId={ivr_id}",
+        "scriptGraphUrl": client.script_graph_url(ivr_id),
         "sourceDocx": parsed.get("sourcePath"),
         "voice": {
             "ttsVoiceId": args.tts_voice_id,
@@ -1626,6 +1706,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate TalkTrack-Master v0.1 system TTS IVR flow.")
     parser.add_argument("--docx", required=True, type=Path, help="Source DOCX path.")
     parser.add_argument("--token-env", default="SD_ADMIN_TOKEN", help="Environment variable that contains the admin token.")
+    parser.add_argument("--backend-region", choices=["auto", "domestic", "overseas"], default="auto", help="Backend selector. Auto probes domestic and overseas with the provided token.")
+    parser.add_argument("--backend-url", default="", help="Optional page/API URL hint such as https://ai.tbot360.com/script-graph?ivrId=3171.")
     parser.add_argument("--report-dir", default=str(DEFAULT_VAULT_REPORT_DIR), type=Path, help="Obsidian report directory.")
     parser.add_argument("--attachment-dir", default=str(DEFAULT_ATTACHMENT_DIR), type=Path, help="Obsidian attachment directory.")
     parser.add_argument("--max-kb", default=8, type=int, help="Number of representative KB answers to write in first-round regression.")
