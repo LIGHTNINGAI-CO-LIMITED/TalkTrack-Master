@@ -134,6 +134,8 @@ Frontend canvas option shape in `sceneListFrontend.nodeList[].intentList` and gr
 [{"value":"27620","label":"客户肯定/默认","digitSequence":""},{"value":"-2","label":"知识库","digitSequence":""},{"value":"-1","label":"兜底","digitSequence":""}]
 ```
 
+Here `-1` / `兜底` is only the system fallback/default route. It is not a business intent and must not be configured as an NLP keyword, ordinary intent label, or large-model 2.0 output. If runtime falls through to `-1`, report it as "no explicit intent matched", not as "matched an intent named 兜底".
+
 Do not deep-copy a backend node into `sceneListFrontend` or graph `customData` without converting `intentList`. The page save logic reads `value` from the frontend option rows and then rebuilds routes from canvas ports / edges. If the frontend list is accidentally replaced by backend route dictionaries, page save may generate abnormal routes and the backend can return a generic `system error`.
 
 Canvas-save acceptance:
@@ -142,6 +144,7 @@ Canvas-save acceptance:
 - frontend `sceneListFrontend.nodeList` uses option rows with `value`, `label`, and `digitSequence`
 - graph `data.customData.intentList` uses the same frontend option-row shape
 - graph `data.ports`, cell port items, and edge source ports use the same `value`
+- `兜底` / `-1`, when present, is only a fallback route and is not included in NLP / 2.0 business-intent candidates
 - after graph-affecting writes, open `/script-graph?ivrId=<ivrId>` and verify the page can save/update from the user's canvas view
 - if real click-save is unavailable, simulated page-save rebuild must return success and the report must state the limitation
 - if a user keeps an old `/script-graph` browser tab open, refresh before clicking page save because stale page memory may overwrite repaired canvas data
@@ -155,6 +158,7 @@ NLP and knowledge-base matching run before large model intent recognition 2.0. T
 - avoid long customer-style utterances as match text; they are harder to hit reliably
 - put explanatory prose in the knowledge-base answer, not in the matching trigger
 - use 2.0 as the semantic fallback after NLP fails or cannot satisfy the intent
+- do not add `兜底` as a trigger, synonym, keyword, or node intent; the system fallback route handles no-match cases
 
 Good trigger shape: `价格`, `多少钱`, `收费`, `费用`.
 
@@ -208,11 +212,13 @@ Parameter rules:
 - `modelIntentRecognitionEnabled=1` is the required enabled state.
 - `modelIntentRecognitionTimeoutMilliSecond=2000`.
 - `modelPrompt` must be adapted to the current scene.
+- `modelPrompt` must state that `兜底` is not an output intent; unclear/no-match cases should fall through to the system fallback route instead of returning `兜底`.
 - `modelId=55` is fixed.
 - `modelTemperature` is in `[0,2)`.
 - `modelPresencePenalty` is in `[-2,2]`.
 - `modelMaxTokens` must be at least `4096`; do not send `0` for an enabled configuration.
 - `modelRecognitionRound=0` for the default all-round setting; do not send values above `4`.
+- `modelResultFormat` must list only explicit business / knowledge-base intent outputs. Do not include `兜底` as an `intentName`.
 
 Switch parameter rules:
 
