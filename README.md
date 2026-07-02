@@ -94,7 +94,8 @@ Important defaults for TalkTrack-Master:
 | `modelIntentRecognitionTimeoutMilliSecond` | `2000` | Max return time |
 | `modelMaxTokens` | `4096` or higher | Do not use `0` when enabled |
 | `modelEnableThinking` | `0` | Keep real-time IVR latency stable |
-| `modelRecognitionRound` | `0` | Default all-round setting, not an on/off switch |
+| `modelRecognitionRound` | `0` | IVR-level default all-round setting, not an on/off switch |
+| `modelIntentRecognitionConfig.modelConfig.recognitionRound` | `0` | Node-level default all-round setting; page shows `识别节点轮次：全部轮次` |
 
 ## Validation
 

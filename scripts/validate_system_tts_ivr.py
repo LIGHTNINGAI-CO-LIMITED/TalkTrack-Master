@@ -176,6 +176,16 @@ def model_config_id(value: Any) -> Any:
     return cfg.get("id") if cfg.get("id") is not None else cfg.get("modelId")
 
 
+def model_config_recognition_round(value: Any) -> Any:
+    cfg = load_model_intent_config(value)
+    if not cfg:
+        return None
+    model_cfg = cfg.get("modelConfig")
+    if isinstance(model_cfg, dict):
+        return model_cfg.get("recognitionRound") if model_cfg.get("recognitionRound") is not None else model_cfg.get("modelRecognitionRound")
+    return cfg.get("recognitionRound") if cfg.get("recognitionRound") is not None else cfg.get("modelRecognitionRound")
+
+
 def expected_model_intent_model(region: str) -> dict[str, Any]:
     if region not in MODEL_INTENT_RECOGNITION_MODEL_BY_REGION:
         raise RuntimeError(f"Unknown backend region for model intent 2.0: {region}")
@@ -521,7 +531,7 @@ def make_model_intent_config(result_label: str = "肯定/默认", model_id: int 
             "thinkBudget": 1,
             "seed": 0,
             "enableThinking": 0,
-            "recognitionRound": 1,
+            "recognitionRound": 0,
         },
     }
 
@@ -545,6 +555,9 @@ def normalize_model_intent_config(node: dict[str, Any], result_label: str = "肯
     model_cfg["id"] = model_id
     if "modelId" in model_cfg:
         model_cfg["modelId"] = model_id
+    model_cfg["recognitionRound"] = 0
+    if "modelRecognitionRound" in model_cfg:
+        model_cfg["modelRecognitionRound"] = 0
     node["modelIntentRecognitionConfig"] = cfg
 
 
@@ -1265,6 +1278,7 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
                 "modelIntentRecognitionEnabled": node.get("modelIntentRecognitionEnabled"),
                 "modelIntentRecognitionConfigPresent": bool(node.get("modelIntentRecognitionConfig")),
                 "modelIntentRecognitionModelId": model_config_id(node.get("modelIntentRecognitionConfig")),
+                "modelIntentRecognitionRound": model_config_recognition_round(node.get("modelIntentRecognitionConfig")),
                 "frontendNodeExists": node_id in front_nodes_by_id,
                 "graphCellExists": node_id in graph_by_id,
                 "frontendHasKnowledgeBaseIntent": has_intent(front_node, "-2"),
@@ -1278,9 +1292,11 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
                 "frontendModelIntentRecognitionEnabled": front_node.get("modelIntentRecognitionEnabled"),
                 "frontendModelIntentRecognitionConfigPresent": bool(front_node.get("modelIntentRecognitionConfig")),
                 "frontendModelIntentRecognitionModelId": model_config_id(front_node.get("modelIntentRecognitionConfig")),
+                "frontendModelIntentRecognitionRound": model_config_recognition_round(front_node.get("modelIntentRecognitionConfig")),
                 "graphModelIntentRecognitionEnabled": graph_custom.get("modelIntentRecognitionEnabled"),
                 "graphModelIntentRecognitionConfigPresent": bool(graph_custom.get("modelIntentRecognitionConfig")),
                 "graphModelIntentRecognitionModelId": model_config_id(graph_custom.get("modelIntentRecognitionConfig")),
+                "graphModelIntentRecognitionRound": model_config_recognition_round(graph_custom.get("modelIntentRecognitionConfig")),
                 "graphCustomDataNextNodeId": graph_custom.get("nextNodeId"),
                 "graphHasKeypadPortGroup": port_summary.get("hasKeypadPortGroup"),
                 "graphUsesGenericInOutPortGroups": port_summary.get("usesGenericInOutPortGroups"),
@@ -1384,10 +1400,22 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
         graph_uses_model_2 = int(item.get("graphModelIntentRecognitionEnabled") or 0) == 1 or bool(item.get("graphModelIntentRecognitionConfigPresent"))
         if backend_uses_model_2 and not is_expected_model_id(item.get("modelIntentRecognitionModelId"), expected_model):
             failures.append(f"node {key} backend 2.0 model is not {expected_model['name']}({expected_model['id']})")
+        if backend_uses_model_2 and item.get("modelIntentRecognitionRound") is None:
+            failures.append(f"node {key} backend 2.0 recognitionRound missing; expected 0 (全部轮次)")
+        if backend_uses_model_2 and item.get("modelIntentRecognitionRound") is not None and int(item.get("modelIntentRecognitionRound") or 0) != 0:
+            failures.append(f"node {key} backend 2.0 recognitionRound != 0 (全部轮次)")
         if frontend_uses_model_2 and not is_expected_model_id(item.get("frontendModelIntentRecognitionModelId"), expected_model):
             failures.append(f"node {key} frontend 2.0 model is not {expected_model['name']}({expected_model['id']})")
+        if frontend_uses_model_2 and item.get("frontendModelIntentRecognitionRound") is None:
+            failures.append(f"node {key} frontend 2.0 recognitionRound missing; expected 0 (全部轮次)")
+        if frontend_uses_model_2 and item.get("frontendModelIntentRecognitionRound") is not None and int(item.get("frontendModelIntentRecognitionRound") or 0) != 0:
+            failures.append(f"node {key} frontend 2.0 recognitionRound != 0 (全部轮次)")
         if graph_uses_model_2 and not is_expected_model_id(item.get("graphModelIntentRecognitionModelId"), expected_model):
             failures.append(f"node {key} graph 2.0 model is not {expected_model['name']}({expected_model['id']})")
+        if graph_uses_model_2 and item.get("graphModelIntentRecognitionRound") is None:
+            failures.append(f"node {key} graph 2.0 recognitionRound missing; expected 0 (全部轮次)")
+        if graph_uses_model_2 and item.get("graphModelIntentRecognitionRound") is not None and int(item.get("graphModelIntentRecognitionRound") or 0) != 0:
+            failures.append(f"node {key} graph 2.0 recognitionRound != 0 (全部轮次)")
         routed_graph_node = bool(item.get("intentList")) or int(item.get("nextType") or 0) == 1
         if routed_graph_node and item.get("graphCellExists"):
             if not item.get("graphHasKeypadPortGroup"):
@@ -1476,7 +1504,7 @@ def markdown_table(rows: list[list[Any]]) -> str:
 def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> None:
     validation = report.get("validation") or {}
     parsed = report.get("parsed") or {}
-    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "2.0模型后端", "2.0模型前端", "2.0模型画布", "画布端口", "nextType", "nextNodeId"]]
+    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "2.0模型后端", "2.0模型前端", "2.0模型画布", "2.0轮次后端", "2.0轮次前端", "2.0轮次画布", "画布端口", "nextType", "nextNodeId"]]
     for item in validation.get("nodeSummary") or []:
         node_rows.append([
             item.get("nodeKey"),
@@ -1494,6 +1522,9 @@ def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> 
             item.get("modelIntentRecognitionModelId") or "",
             item.get("frontendModelIntentRecognitionModelId") or "",
             item.get("graphModelIntentRecognitionModelId") or "",
+            "" if item.get("modelIntentRecognitionRound") is None else item.get("modelIntentRecognitionRound"),
+            "" if item.get("frontendModelIntentRecognitionRound") is None else item.get("frontendModelIntentRecognitionRound"),
+            "" if item.get("graphModelIntentRecognitionRound") is None else item.get("graphModelIntentRecognitionRound"),
             bool(item.get("graphHasKeypadPortGroup") and not item.get("graphUsesGenericInOutPortGroups") and (not item.get("graphPortItemIds") or item.get("graphAllItemsUseKeypadPort"))),
             item.get("nextType") or "",
             item.get("nextNodeId") or "",

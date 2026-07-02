@@ -244,7 +244,7 @@ Parameter rules:
 - `modelTemperature` is in `[0,2)`.
 - `modelPresencePenalty` is in `[-2,2]`.
 - `modelMaxTokens` must be at least `4096`; do not send `0` for an enabled configuration.
-- `modelRecognitionRound=0` for the default all-round setting; do not send values above `4`.
+- IVR-level `modelRecognitionRound=0` for the default all-round setting; do not send values above `4`.
 - `modelResultFormat` must list only explicit business / knowledge-base intent outputs. Do not include `兜底` as an `intentName`.
 
 Switch parameter rules:
@@ -267,11 +267,12 @@ For every normal node that can route on user replies, also preserve or create th
 - `modelIntentRecognitionEnabled=1`
 - non-empty `modelIntentRecognitionConfig`
 - `modelIntentRecognitionConfig.modelConfig.id` matches the expected regional model: domestic `55`, overseas `62`
+- `modelIntentRecognitionConfig.modelConfig.recognitionRound=0`, which the page displays as `识别节点轮次：全部轮次`
 - the same enabled/config state in backend `sceneList`
 - the same enabled/config state in frontend `sceneListFrontend.nodeList`
 - the same enabled/config state in frontend graph `data.customData`
 
-When an existing valid `modelIntentRecognitionConfig` is present, preserve its prompt and result format, but still force the model selection to the expected regional model ID. Do this in backend `sceneList`, frontend `sceneListFrontend.nodeList`, and graph `customData`; otherwise the page can show later nodes using another model even when the first node is correct. Do not rely on page defaults, copy-order inheritance, or "the first node already uses the right model". When a routed normal node is missing the config, create it from the approved 2.0 template and use the node's available intent labels to choose a valid `resultFormat` example. Do not claim Advanced Settings 2.0 completion from node-level fields alone, and do not claim routed-node completion from the IVR-level switch alone.
+When an existing valid `modelIntentRecognitionConfig` is present, preserve its prompt and result format, but still force the model selection to the expected regional model ID and force `recognitionRound=0`. Do this in backend `sceneList`, frontend `sceneListFrontend.nodeList`, and graph `customData`; otherwise the page can show later nodes using another model or a specified round even when the first node is correct. Do not rely on page defaults, copy-order inheritance, or "the first node already uses the right model". When a routed normal node is missing the config, create it from the approved 2.0 template and use the node's available intent labels to choose a valid `resultFormat` example. Do not claim Advanced Settings 2.0 completion from node-level fields alone, and do not claim routed-node completion from the IVR-level switch alone.
 
 For jump nodes, only apply node-level 2.0 when the product surface actually enables 2.0 on that jump node. If a jump node has `modelIntentRecognitionEnabled=1` or a non-empty `modelIntentRecognitionConfig`, it must follow the same regional model rule and must be read back in backend, frontend, and graph copies.
 
@@ -290,8 +291,10 @@ Readback failures that must block acceptance:
 
 - IVR-level `modelId` does not match the expected regional model.
 - Any normal node or 2.0-enabled jump node has `modelIntentRecognitionConfig.modelConfig.id` missing or not equal to the expected regional model.
+- Any normal node or 2.0-enabled jump node has `modelIntentRecognitionConfig.modelConfig.recognitionRound` missing or not equal to `0` when the backend exposes node-level model config.
 - Backend, frontend node copy, and graph `customData` disagree on the node-level model ID.
 - The UI edit dialog for a sampled node shows a model other than the expected regional model.
+- The UI edit dialog for a sampled node shows `识别节点轮次` as anything other than `全部轮次`.
 
 ## Page Spot Check
 

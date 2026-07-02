@@ -139,7 +139,8 @@ https://ai.sd6g.com:1904/api/web
 
 不是开关的字段：
 
-- `modelRecognitionRound=0` 表示默认全轮次；`1` 到 `4` 表示指定轮次，不支持大于 `4`。
+- 话术级 `modelRecognitionRound=0` 表示默认全轮次；`1` 到 `4` 表示指定轮次，不支持大于 `4`。
+- 节点级 `modelIntentRecognitionConfig.modelConfig.recognitionRound=0` 表示页面“识别节点轮次：全部轮次”；所有启用大模型意图分析 2.0 的普通节点 / 跳转节点都必须使用 `0`，不能只修第一个节点，也不能继承模板里的 `1`。
 - `modelTopP`、`modelTopK`、`modelTemperature`、`modelPresencePenalty` 是采样/生成参数，不是开关。
 - `modelMaxTokens` 启用时最低 `4096`，不要填 `0`。
 
@@ -151,7 +152,7 @@ https://ai.sd6g.com:1904/api/web
 - `modelPrompt` 非空或等价配置非空
 - 如后端暴露，确认 `modelMaxTokens>=4096`、`modelRecognitionRound=0`
 - 页面 `高级设置 -> 大模型意图分析2.0` 已勾选
-- 承接用户回复的普通节点仍需保留 / 补齐节点级 `modelIntentRecognitionEnabled=1` 和非空 `modelIntentRecognitionConfig`
+- 承接用户回复的普通节点仍需保留 / 补齐节点级 `modelIntentRecognitionEnabled=1`、非空 `modelIntentRecognitionConfig`、正确区域模型 ID，以及 `modelIntentRecognitionConfig.modelConfig.recognitionRound=0`
 
 ## 标准任务模板
 
@@ -239,6 +240,7 @@ token：Obsidian secretStorage / testtoken
 - `modelMaxTokens`
 - `modelRecognitionRound`
 - 承接用户回复普通节点的节点级 `modelIntentRecognitionEnabled` / `modelIntentRecognitionConfig`
+- 节点级 `modelIntentRecognitionConfig.modelConfig.recognitionRound=0`，页面弹窗显示 `识别节点轮次：全部轮次`
 - 页面高级设置是否显示大模型意图分析2.0已勾选
 
 若可写且未开启，使用 `POST <authenticated-api-base>/ivr/updateModelIntentRecognitionConfig` 补齐，写后读回。
