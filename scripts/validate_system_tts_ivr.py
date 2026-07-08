@@ -636,6 +636,41 @@ def intent_target_map_from_backend(node: dict[str, Any]) -> dict[str, str]:
     return target_map
 
 
+def looks_like_backend_route_row(row: dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if any(key in row for key in ("value", "label", "digitSequence")):
+        return False
+    if len(row) != 1:
+        return False
+    key = next(iter(row.keys()))
+    value = row.get(key)
+    return bool(re.fullmatch(r"-?\d+", str(key))) and (value == "" or isinstance(value, str))
+
+
+def frontend_intent_list_issues(node: dict[str, Any], require_rows: bool = False) -> list[str]:
+    rows = node.get("intentList")
+    if rows is None:
+        return ["missing intentList"] if require_rows else []
+    if not isinstance(rows, list):
+        return [f"intentList is {type(rows).__name__}, expected list"]
+    if require_rows and not rows:
+        return ["intentList is empty"]
+
+    issues: list[str] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            issues.append(f"row {index} is {type(row).__name__}, expected object")
+            continue
+        if looks_like_backend_route_row(row):
+            issues.append(f"row {index} uses backend route format; frontend requires value/label/digitSequence")
+            continue
+        for key in ("value", "label", "digitSequence"):
+            if key not in row:
+                issues.append(f"row {index} missing {key}")
+    return issues
+
+
 def frontend_intent_rows_from_backend(
     backend_node: dict[str, Any],
     label_by_intent: dict[str, str] | None = None,
@@ -1258,6 +1293,10 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
             graph_custom = {}
         port_summary = graph_cell_port_summary(graph_cell)
         tts_list = node.get("ttsPlaybackList") or []
+        backend_intent_list = node.get("intentList") or []
+        require_frontend_intents = bool(backend_intent_list)
+        frontend_intent_issues = frontend_intent_list_issues(front_node, require_frontend_intents)
+        graph_intent_issues = frontend_intent_list_issues(graph_custom, require_frontend_intents)
         node_summary.append(
             {
                 "nodeKey": key,
@@ -1270,8 +1309,12 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
                 "nextType": node.get("nextType"),
                 "nextSceneId": node.get("nextSceneId"),
                 "nextNodeId": node.get("nextNodeId"),
-                "intentList": node.get("intentList") or [],
+                "intentList": backend_intent_list,
                 "hasKnowledgeBaseIntent": has_intent(node, "-2"),
+                "frontendIntentListCount": len(front_node.get("intentList") or []) if isinstance(front_node.get("intentList"), list) else None,
+                "frontendIntentListIssues": frontend_intent_issues,
+                "graphIntentListCount": len(graph_custom.get("intentList") or []) if isinstance(graph_custom.get("intentList"), list) else None,
+                "graphIntentListIssues": graph_intent_issues,
                 "matchKnowledgeBaseEnabled": node.get("matchKnowledgeBaseEnabled"),
                 "knowledgeBaseMatchType": node.get("knowledgeBaseMatchType"),
                 "knowledgeBaseMatchListCount": len(node.get("knowledgeBaseMatchList") or []),
@@ -1417,6 +1460,11 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
         if graph_uses_model_2 and item.get("graphModelIntentRecognitionRound") is not None and int(item.get("graphModelIntentRecognitionRound") or 0) != 0:
             failures.append(f"node {key} graph 2.0 recognitionRound != 0 (全部轮次)")
         routed_graph_node = bool(item.get("intentList")) or int(item.get("nextType") or 0) == 1
+        if bool(item.get("intentList")):
+            if item.get("frontendIntentListIssues"):
+                failures.append(f"node {key} frontend intentList save-safety invalid: {'; '.join(item.get('frontendIntentListIssues') or [])}")
+            if item.get("graphIntentListIssues"):
+                failures.append(f"node {key} graph customData intentList save-safety invalid: {'; '.join(item.get('graphIntentListIssues') or [])}")
         if routed_graph_node and item.get("graphCellExists"):
             if not item.get("graphHasKeypadPortGroup"):
                 failures.append(f"node {key} graph ports missing {KEYPAD_PORT_GROUP}")
@@ -1504,7 +1552,7 @@ def markdown_table(rows: list[list[Any]]) -> str:
 def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> None:
     validation = report.get("validation") or {}
     parsed = report.get("parsed") or {}
-    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "2.0模型后端", "2.0模型前端", "2.0模型画布", "2.0轮次后端", "2.0轮次前端", "2.0轮次画布", "画布端口", "nextType", "nextNodeId"]]
+    node_rows = [["节点Key", "节点名", "type", "recordType", "TTS数", "TTS路径", "KB后端", "KB前端", "KB画布", "2.0后端", "2.0前端", "2.0画布", "2.0模型后端", "2.0模型前端", "2.0模型画布", "2.0轮次后端", "2.0轮次前端", "2.0轮次画布", "前端保存安全", "画布端口", "nextType", "nextNodeId"]]
     for item in validation.get("nodeSummary") or []:
         node_rows.append([
             item.get("nodeKey"),
@@ -1525,6 +1573,7 @@ def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> 
             "" if item.get("modelIntentRecognitionRound") is None else item.get("modelIntentRecognitionRound"),
             "" if item.get("frontendModelIntentRecognitionRound") is None else item.get("frontendModelIntentRecognitionRound"),
             "" if item.get("graphModelIntentRecognitionRound") is None else item.get("graphModelIntentRecognitionRound"),
+            bool(not item.get("frontendIntentListIssues") and not item.get("graphIntentListIssues")),
             bool(item.get("graphHasKeypadPortGroup") and not item.get("graphUsesGenericInOutPortGroups") and (not item.get("graphPortItemIds") or item.get("graphAllItemsUseKeypadPort"))),
             item.get("nextType") or "",
             item.get("nextNodeId") or "",
