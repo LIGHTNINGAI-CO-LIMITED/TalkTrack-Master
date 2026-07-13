@@ -73,6 +73,7 @@ MODEL_INTENT_RECOGNITION_MODEL_BY_REGION = {
 DEFAULT_MODEL_ID = MODEL_INTENT_RECOGNITION_MODEL_BY_REGION["domestic"]["id"]
 DEFAULT_MODEL_NAME = MODEL_INTENT_RECOGNITION_MODEL_BY_REGION["domestic"]["name"]
 KEYPAD_PORT_GROUP = "keypadPort"
+RESERVED_SYSTEM_INTENT_IDS = frozenset({"-1", "-2"})
 DEFAULT_MODEL_RESULT_FORMAT = json.dumps([{"intentName": "肯定/默认"}], ensure_ascii=False, separators=(",", ":"))
 
 
@@ -671,6 +672,70 @@ def frontend_intent_list_issues(node: dict[str, Any], require_rows: bool = False
     return issues
 
 
+def positive_numeric_intent_id(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text if re.fullmatch(r"\d+", text) and int(text) > 0 else None
+
+
+def intent_ownership_issues(
+    scene_list: list[dict[str, Any]],
+    front_list: list[dict[str, Any]],
+    intent_catalog: dict[str, str],
+    phase: str,
+) -> list[str]:
+    allowed = set(intent_catalog)
+    issues: list[str] = []
+
+    def check_value(value: Any, path: str) -> None:
+        intent_id = positive_numeric_intent_id(value)
+        if intent_id and intent_id not in allowed:
+            issues.append(f"{path} references foreign intent id {intent_id}")
+
+    def check_backend_node(node: dict[str, Any], path: str) -> None:
+        for index, row in enumerate(node.get("intentList") or []):
+            if not isinstance(row, dict) or "value" in row:
+                continue
+            for key in row:
+                check_value(key, f"{path}.intentList[{index}]")
+        for index, value in enumerate(node.get("interruptedIntentList") or []):
+            check_value(value, f"{path}.interruptedIntentList[{index}]")
+
+    def check_frontend_container(container: dict[str, Any], path: str) -> None:
+        for index, row in enumerate(container.get("intentList") or []):
+            if isinstance(row, dict):
+                check_value(row.get("value"), f"{path}.intentList[{index}].value")
+        for index, value in enumerate(container.get("interruptedIntentList") or []):
+            check_value(value, f"{path}.interruptedIntentList[{index}]")
+
+    for scene_index, scene in enumerate(scene_list or []):
+        for node_index, node in enumerate(scene.get("nodeList") or []):
+            node_name = node.get("name") or node.get("id") or node_index
+            check_backend_node(node, f"{phase}.sceneList[{scene_index}].node[{node_name}]")
+
+    for scene_index, scene in enumerate(front_list or []):
+        for node_index, node in enumerate(scene.get("nodeList") or []):
+            node_name = node.get("name") or node.get("id") or node_index
+            check_frontend_container(node, f"{phase}.sceneListFrontend[{scene_index}].node[{node_name}]")
+        for cell in (scene.get("graph") or {}).get("cells") or []:
+            custom = ((cell.get("data") or {}).get("customData") or {})
+            if not isinstance(custom, dict):
+                continue
+            cell_name = custom.get("name") or cell.get("id") or "unknown"
+            check_frontend_container(custom, f"{phase}.graphCell[{cell_name}].customData")
+    return issues
+
+
+def validate_intent_ownership(
+    scene_list: list[dict[str, Any]],
+    front_list: list[dict[str, Any]],
+    intent_catalog: dict[str, str],
+    phase: str,
+) -> None:
+    issues = intent_ownership_issues(scene_list, front_list, intent_catalog, phase)
+    if issues:
+        raise RuntimeError("current-IVR intent ownership invalid: " + "; ".join(issues[:12]))
+
+
 def frontend_intent_rows_from_backend(
     backend_node: dict[str, Any],
     label_by_intent: dict[str, str] | None = None,
@@ -985,13 +1050,20 @@ def create_test_ivr(client: Client, name: str, voice_id: int, speech_rate: float
     return ivr_id, {"insert": created, "update": update}
 
 
-def get_intents(client: Client, ivr_id: int) -> dict[str, str]:
+def get_intent_catalog(client: Client, ivr_id: int) -> dict[str, str]:
     data = client.get(f"/ivrIntent/findList/{ivr_id}")
-    Client.assert_ok(data, "read intents")
+    Client.assert_ok(data, "read current-IVR intent catalog")
+    return {
+        str(item.get("id")): str(item.get("name") or "")
+        for item in data.get("data") or []
+        if item.get("id") is not None and positive_numeric_intent_id(item.get("id"))
+    }
+
+
+def get_intents(client: Client, ivr_id: int, intent_catalog: dict[str, str] | None = None) -> dict[str, str]:
+    catalog = intent_catalog if intent_catalog is not None else get_intent_catalog(client, ivr_id)
     result: dict[str, str] = {}
-    for item in data.get("data") or []:
-        name = str(item.get("name") or "")
-        item_id = str(item.get("id") or "")
+    for item_id, name in catalog.items():
         if not item_id:
             continue
         if "肯定" in name or "默认" in name:
@@ -1006,7 +1078,7 @@ def get_intents(client: Client, ivr_id: int) -> dict[str, str]:
     return result
 
 
-def configure_scene(client: Client, ivr_id: int, parsed: dict[str, Any], voice_id: int, speech_rate: float, expected_model: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+def configure_scene(client: Client, ivr_id: int, parsed: dict[str, Any], voice_id: int, speech_rate: float, expected_model: dict[str, Any], intent_catalog: dict[str, str]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     template = client.get(f"/ivr/findSceneList/{TEMPLATE_IVR_ID}", timeout=120)
     Client.assert_ok(template, "read template scene")
     scene_list = copy.deepcopy(safe_json_loads(template["data"]["sceneList"], []))
@@ -1054,7 +1126,7 @@ def configure_scene(client: Client, ivr_id: int, parsed: dict[str, Any], voice_i
         node_by_key["flow2_intro"]["id"],
     )
 
-    intents = get_intents(client, ivr_id)
+    intents = get_intents(client, ivr_id, intent_catalog)
     positive = intents["positive"]
     negative = intents["negative"]
     label_by_intent = {positive: "肯定/默认", negative: "拒绝/否定", "-2": "知识库", "-1": "兜底"}
@@ -1072,6 +1144,7 @@ def configure_scene(client: Client, ivr_id: int, parsed: dict[str, Any], voice_i
             enable_model_intent_2(node, label_by_intent.get(positive, "肯定/默认"), model_id=int(expected_model["id"]))
         sync_frontend(front_scene, node, label_by_intent)
     build_edges(front_scene, nodes)
+    validate_intent_ownership([scene], [front_scene], intent_catalog, "pre_write_scene")
 
     payload = {
         "ivrId": ivr_id,
@@ -1082,6 +1155,12 @@ def configure_scene(client: Client, ivr_id: int, parsed: dict[str, Any], voice_i
     Client.assert_ok(updated, "update scene list")
     readback = client.get(f"/ivr/findSceneList/{ivr_id}", timeout=120)
     Client.assert_ok(readback, "read back scene")
+    validate_intent_ownership(
+        safe_json_loads((readback.get("data") or {}).get("sceneList"), []),
+        safe_json_loads((readback.get("data") or {}).get("sceneListFrontend"), []),
+        intent_catalog,
+        "readback_scene",
+    )
     return readback, tts_results, {"updateSceneList": updated, "intentIds": intents, "nodeIdByKey": {key: node.get("id") for key, node in node_by_key.items()}, "sceneId": scene_id}
 
 
@@ -1207,7 +1286,7 @@ def sync_matching_to_frontend(front_list: list[dict[str, Any]], backend_node: di
             cell["ports"] = rebuild_ports(cell.get("ports") or {}, rows, target_map, size.get("width", 276), size.get("height", 176))
 
 
-def apply_knowledge_base_matching(client: Client, ivr_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def apply_knowledge_base_matching(client: Client, ivr_id: int, intent_catalog: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
     knowledge_base_ids = read_knowledge_base_ids(client, ivr_id)
     current = client.get(f"/ivr/findSceneList/{ivr_id}", timeout=120)
     Client.assert_ok(current, "read scene before KB matching")
@@ -1234,6 +1313,7 @@ def apply_knowledge_base_matching(client: Client, ivr_id: int) -> tuple[dict[str
             if before != after:
                 changed_nodes.append({"id": node.get("id"), "name": node.get("name"), "before": before, "after": after})
             sync_matching_to_frontend(front_list, node)
+    validate_intent_ownership(scene_list, front_list, intent_catalog, "pre_write_kb_matching")
     payload = {
         "ivrId": ivr_id,
         "sceneList": json.dumps(scene_list, ensure_ascii=False, separators=(",", ":")),
@@ -1243,6 +1323,12 @@ def apply_knowledge_base_matching(client: Client, ivr_id: int) -> tuple[dict[str
     Client.assert_ok(updated, "update KB matching")
     readback = client.get(f"/ivr/findSceneList/{ivr_id}", timeout=120)
     Client.assert_ok(readback, "read back KB matching")
+    validate_intent_ownership(
+        safe_json_loads((readback.get("data") or {}).get("sceneList"), []),
+        safe_json_loads((readback.get("data") or {}).get("sceneListFrontend"), []),
+        intent_catalog,
+        "readback_kb_matching",
+    )
     return readback, {"updateSceneListForKnowledgeBaseMatching": updated, "knowledgeBaseIds": knowledge_base_ids, "changedNodes": changed_nodes}
 
 
@@ -1251,10 +1337,11 @@ def parse_tts_json(value: Any) -> list[dict[str, Any]]:
     return parsed if isinstance(parsed, list) else []
 
 
-def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, Any], node_tts: list[dict[str, Any]], kb_tts: list[dict[str, Any]], kb_details: list[dict[str, Any]], scene_meta: dict[str, Any], expected_model: dict[str, Any]) -> dict[str, Any]:
+def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, Any], node_tts: list[dict[str, Any]], kb_tts: list[dict[str, Any]], kb_details: list[dict[str, Any]], scene_meta: dict[str, Any], expected_model: dict[str, Any], intent_catalog: dict[str, str]) -> dict[str, Any]:
     root_data = scene_readback.get("data") or {}
     scene_list = safe_json_loads(root_data.get("sceneList"), [])
     front_list = safe_json_loads(root_data.get("sceneListFrontend"), [])
+    ownership_issues = intent_ownership_issues(scene_list, front_list, intent_catalog, "final_readback")
     nodes = [node for scene in scene_list for node in scene.get("nodeList") or []]
     front_nodes = [node for scene in front_list for node in scene.get("nodeList") or []]
     nodes_by_id = {node.get("id"): node for node in nodes}
@@ -1422,6 +1509,7 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
         )
 
     failures: list[str] = []
+    failures.extend(f"intent ownership invalid: {issue}" for issue in ownership_issues)
     if str(root_model_intent_summary.get("updateApiCode")) != "0":
         failures.append("IVR-level model intent recognition 2.0 update API did not return code=0")
     if int(root_model_intent_summary.get("modelIntentRecognitionEnabled") or 0) != 1:
@@ -1532,6 +1620,11 @@ def validate_run(ivr_id: int, parsed: dict[str, Any], scene_readback: dict[str, 
         "passed": not failures,
         "failureItems": failures,
         "rootModelIntentSummary": root_model_intent_summary,
+        "intentOwnershipSummary": {
+            "currentIvrIntentCount": len(intent_catalog),
+            "issues": ownership_issues,
+            "passed": not ownership_issues,
+        },
         "nodeSummary": node_summary,
         "jumpChecks": jump_checks,
         "edgeChecks": edge_checks,
@@ -1586,6 +1679,7 @@ def write_report(report: dict[str, Any], report_path: Path, json_path: Path) -> 
     for item in validation.get("jumpChecks") or []:
         jump_rows.append([item.get("nodeKey"), item.get("nodeName"), item.get("nextType"), item.get("nextSceneId"), item.get("nextNodeId"), item.get("targetExists"), item.get("graphCustomDataMatches")])
     root_model = validation.get("rootModelIntentSummary") or {}
+    ownership = validation.get("intentOwnershipSummary") or {}
     root_model_rows = [
         ["字段", "读回值"],
         ["updateApiCode", root_model.get("updateApiCode")],
@@ -1625,6 +1719,7 @@ source: [[普通节点配置Skill_v0.1范围与验收_20260512]]
 - 语速：`{report.get('voice', {}).get('speechRate')}`
 - 脱敏 JSON：[[{json_path.name}]]
 - token：仅从当前环境变量读取，未写入脚本、报告、JSON 或截图。
+- 当前 IVR 意图数：`{ownership.get('currentIvrIntentCount')}`；意图归属校验：`{'通过' if ownership.get('passed') else '失败'}`
 
 ## DOCX 解析摘要
 
@@ -1659,6 +1754,7 @@ source: [[普通节点配置Skill_v0.1范围与验收_20260512]]
 | --- | --- |
 | `GET /account/findInfo` | `{report.get('apiCodes', {}).get('accountFindInfo')}` |
 | `GET /ivr/findAllTtsVoiceBaseInfo` | `{report.get('apiCodes', {}).get('voiceList')}` |
+| `GET /ivrIntent/findList/{{ivrId}}` | `{report.get('apiCodes', {}).get('intentFindList')}` |
 | `POST /ivr/insert` | `{report.get('apiCodes', {}).get('ivrInsert')}` |
 | `POST /ivr/update` | `{report.get('apiCodes', {}).get('ivrUpdate')}` |
 | `GET /ivr/findSceneList/3471` | `{report.get('apiCodes', {}).get('templateRead')}` |
@@ -1702,16 +1798,17 @@ def run_online(args: argparse.Namespace, parsed: dict[str, Any], token_text: str
     ivr_name = args.ivr_name or f"TalkTrack-Master_v0.1_活动邀约系统TTS回归_{now_stamp()}"
     ivr_id, create_result = create_test_ivr(client, ivr_name, args.tts_voice_id, args.speech_rate)
     before_snapshot = client.get(f"/ivr/findSceneList/{ivr_id}", timeout=120)
-    scene_readback, node_tts, scene_meta = configure_scene(client, ivr_id, parsed, args.tts_voice_id, args.speech_rate, expected_model)
+    intent_catalog = get_intent_catalog(client, ivr_id)
+    scene_readback, node_tts, scene_meta = configure_scene(client, ivr_id, parsed, args.tts_voice_id, args.speech_rate, expected_model, intent_catalog)
     kb_inserts, kb_page, kb_details = create_knowledge_bases(client, ivr_id, parsed, args.tts_voice_id, args.speech_rate)
-    scene_readback, kb_match_meta = apply_knowledge_base_matching(client, ivr_id)
+    scene_readback, kb_match_meta = apply_knowledge_base_matching(client, ivr_id, intent_catalog)
     scene_meta.update(kb_match_meta)
     model_intent_meta = update_ivr_model_intent_recognition_config(client, ivr_id, expected_model)
     scene_meta.update(model_intent_meta)
     scene_readback = client.get(f"/ivr/findSceneList/{ivr_id}", timeout=120)
     Client.assert_ok(scene_readback, "read back IVR model intent recognition 2.0")
     kb_tts = [item["tts"] for item in kb_inserts]
-    validation = validate_run(ivr_id, parsed, scene_readback, node_tts, kb_tts, kb_details, scene_meta, expected_model)
+    validation = validate_run(ivr_id, parsed, scene_readback, node_tts, kb_tts, kb_details, scene_meta, expected_model, intent_catalog)
 
     stamp = today_slug()
     report_path = args.report_dir / f"TalkTrack-Master_v0.1_系统TTS回归报告_{stamp}_ivr{ivr_id}.md"
@@ -1738,6 +1835,7 @@ def run_online(args: argparse.Namespace, parsed: dict[str, Any], token_text: str
         "apiCodes": {
             "accountFindInfo": account.get("code"),
             "voiceList": voices.get("code"),
+            "intentFindList": "0",
             "ivrInsert": create_result["insert"].get("code"),
             "ivrUpdate": create_result["update"].get("code"),
             "templateRead": "0",

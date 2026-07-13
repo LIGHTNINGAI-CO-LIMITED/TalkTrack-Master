@@ -153,6 +153,39 @@ Canvas-save acceptance:
 - if real click-save is unavailable, simulated page-save rebuild must return success and the report must state the limitation
 - if a user keeps an old `/script-graph` browser tab open, refresh before clicking page save because stale page memory may overwrite repaired canvas data
 
+### Current-IVR Intent Ownership / Copy Safety
+
+Frontend shape validation and graph rendering validation are necessary but not sufficient. Before every `updateSceneList`, source-IVR copy, repair, or delivery, call:
+
+```text
+GET <resolved-api-base>/ivrIntent/findList/{ivrId}
+```
+
+Build the allowed positive intent-ID set from that exact IVR. Then validate:
+
+- backend `sceneList.nodeList[].intentList` keys
+- frontend `sceneListFrontend.nodeList[].intentList[].value`
+- graph `data.customData.intentList[].value`
+- positive numeric values in `interruptedIntentList` or equivalent interrupted-intent rows
+
+System routes `-1` and `-2` are allowed without positive-catalog membership. Every positive numeric reference must belong to the current IVR. A foreign ID is a P0 defect even if the route target node, TTS file, and 2.0 configuration are valid. It can cause runtime intent prediction to fail before large-model 2.0 is invoked, so do not misdiagnose the symptom as a model or TTS outage.
+
+For IVR copy or template reuse:
+
+1. Validate the source IVR against its own intent catalog before attempting copy.
+2. Read the target IVR intent catalog after the target exists.
+3. Map each source positive ID to its source intent name, then to exactly one target ID with the same name.
+4. Replace the ID consistently in backend routes, frontend option rows, graph custom data, and interrupted-intent rows.
+5. If any source ID is absent from the source catalog or any target name mapping is missing/ambiguous, stop before write/copy. Never reuse the source ID, guess by numeric proximity, silently remove the branch, or claim completion.
+
+Hard failure conditions:
+
+- a positive backend route key is absent from `/ivrIntent/findList/{ivrId}`
+- a positive frontend/graph intent `value` is absent from the same target-IVR catalog
+- backend, frontend, and graph reference different positive IDs for the same branch
+- a copy payload still contains a source-IVR positive intent ID after target remapping
+- source validation finds a stale/foreign ID, because the copy service may fail while building its ID map
+
 ### Frontend Canvas Render Shape / Port Schema
 
 The canvas is rendered from `sceneListFrontend.graph.cells`, not directly from backend `sceneList`. A backend readback with all nodes present does not prove that the user's canvas can render.
